@@ -11,12 +11,12 @@ import Speech
 import SwiftUI
 
 @MainActor
-final class SpeechController: NSObject, ObservableObject {
+final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var statusMessage = "Listening to the microphone and transcribing live."
     @Published private(set) var liveTranscript = "Waiting for speech..."
 
-    private let renderingSynthesizer = AVSpeechSynthesizer()
+    private let playbackSynthesizer = AVSpeechSynthesizer()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let speechVoice = AVSpeechSynthesisVoice(language: "en-US")
     private let voiceProcessingIO: VoiceProcessingIO
@@ -31,8 +31,6 @@ final class SpeechController: NSObject, ObservableObject {
     private var isPlaybackAudible = false
     private var lastLoggedTranscript = ""
     private var shouldKeepListening = false
-    private var currentPlaybackToken: UUID?
-    private var currentPlaybackFileURL: URL?
     private var listenerRestartTask: Task<Void, Never>?
 
     override init() {
@@ -40,11 +38,7 @@ final class SpeechController: NSObject, ObservableObject {
             print("[VoiceStop] \(message)")
         })
         super.init()
-        voiceProcessingIO.playbackCompletionHandler = { [weak self] playbackToken in
-            DispatchQueue.main.async {
-                self?.handlePlaybackCompletion(for: playbackToken)
-            }
-        }
+        playbackSynthesizer.delegate = self
     }
 
     func preparePermissions() async {
@@ -79,7 +73,7 @@ final class SpeechController: NSObject, ObservableObject {
         }
 
         Task {
-            await beginPlayback(with: trimmedText)
+            beginPlayback(with: trimmedText)
         }
     }
 
@@ -109,7 +103,7 @@ final class SpeechController: NSObject, ObservableObject {
         stopListening(reason: "view disappeared", shouldLog: false)
     }
 
-    private func beginPlayback(with text: String) async {
+    private func beginPlayback(with text: String) {
         isPreparingPlayback = true
         statusMessage = "Preparing synthesized playback..."
 
@@ -125,16 +119,14 @@ final class SpeechController: NSObject, ObservableObject {
         utterance.voice = speechVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
 
-        do {
-            let renderedPlayback = try await renderPlayback(for: utterance)
-            try startPlayback(for: renderedPlayback)
-        } catch {
-            isPreparingPlayback = false
-            isSpeaking = false
-            isPlaybackAudible = false
-            log("Playback preparation failed: \(error.localizedDescription)")
-            statusMessage = "Playback could not start."
-        }
+        isPreparingPlayback = false
+        isPlaybackAudible = true
+        isSpeaking = true
+        statusMessage = canListenForTranscription
+            ? "Playback is active. Any spoken word will interrupt it."
+            : "Playing synthesized audio."
+        log("Starting speech synthesis.")
+        playbackSynthesizer.speak(utterance)
     }
 
     private func startRecognitionSession() throws {
@@ -236,17 +228,15 @@ final class SpeechController: NSObject, ObservableObject {
         if shouldKeepListening, isListeningContinuously {
             stopListening(reason: "refreshing recognition after interruption", shouldLog: false)
         }
-        voiceProcessingIO.stopPlayback()
-        finishPlayback(wasInterrupted: true)
+        if !playbackSynthesizer.stopSpeaking(at: .immediate) {
+            finishPlayback(wasInterrupted: true)
+        }
     }
 
     private func finishPlayback(wasInterrupted: Bool) {
         isPreparingPlayback = false
         isPlaybackAudible = false
         isSpeaking = false
-        currentPlaybackToken = nil
-
-        cleanupPlaybackFile()
 
         if !isListeningContinuously {
             voiceProcessingIO.stop()
@@ -304,93 +294,6 @@ final class SpeechController: NSObject, ObservableObject {
         log("Recognition error [\(nsError.domain):\(nsError.code)]: \(error.localizedDescription)")
     }
 
-    private func renderPlayback(for utterance: AVSpeechUtterance) async throws -> RenderedPlayback {
-        let fileURL = makePlaybackFileURL()
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let lock = NSLock()
-            var didResume = false
-            var audioFile: AVAudioFile?
-
-            func resume(with result: Result<RenderedPlayback, Error>) {
-                lock.lock()
-                defer { lock.unlock() }
-
-                guard !didResume else {
-                    return
-                }
-
-                didResume = true
-                continuation.resume(with: result)
-            }
-
-            do {
-                try FileManager.default.removeItem(at: fileURL)
-            } catch {
-                if (error as NSError).code != NSFileNoSuchFileError {
-                    resume(with: .failure(error))
-                    return
-                }
-            }
-
-            log("Rendering synthesized speech to \(fileURL.lastPathComponent).")
-            renderingSynthesizer.write(utterance, toBufferCallback: { buffer in
-                guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
-                    resume(with: .failure(VoiceStopError.unexpectedSynthesisBuffer))
-                    return
-                }
-
-                if pcmBuffer.frameLength == 0 {
-                    resume(with: .success(RenderedPlayback(fileURL: fileURL)))
-                    return
-                }
-
-                do {
-                    if audioFile == nil {
-                        audioFile = try AVAudioFile(
-                            forWriting: fileURL,
-                            settings: pcmBuffer.format.settings,
-                            commonFormat: pcmBuffer.format.commonFormat,
-                            interleaved: pcmBuffer.format.isInterleaved
-                        )
-                    }
-
-                    try audioFile?.write(from: pcmBuffer)
-                } catch {
-                    resume(with: .failure(error))
-                }
-            })
-        }
-    }
-
-    private func startPlayback(for renderedPlayback: RenderedPlayback) throws {
-        let playbackToken = UUID()
-
-        cleanupPlaybackFile()
-        currentPlaybackFileURL = renderedPlayback.fileURL
-        currentPlaybackToken = playbackToken
-
-        try voiceProcessingIO.startIfNeeded()
-        try voiceProcessingIO.schedulePlayback(from: renderedPlayback.fileURL, playbackToken: playbackToken)
-
-        isPreparingPlayback = false
-        isPlaybackAudible = true
-        isSpeaking = true
-        statusMessage = canListenForTranscription
-            ? "Playback is active. Any spoken word will interrupt it."
-            : "Playing synthesized audio."
-        log("Speech playback started from VoiceProcessingIO.")
-    }
-
-    private func handlePlaybackCompletion(for playbackToken: UUID) {
-        guard currentPlaybackToken == playbackToken else {
-            return
-        }
-
-        log("Speech playback finished.")
-        finishPlayback(wasInterrupted: false)
-    }
-
     private func restartListeningAfterDelay() {
         listenerRestartTask?.cancel()
         listenerRestartTask = Task {
@@ -412,28 +315,6 @@ final class SpeechController: NSObject, ObservableObject {
                 }
             }
         }
-    }
-
-    private func cleanupPlaybackFile() {
-        guard let currentPlaybackFileURL else {
-            return
-        }
-
-        do {
-            try FileManager.default.removeItem(at: currentPlaybackFileURL)
-        } catch {
-            if (error as NSError).code != NSFileNoSuchFileError {
-                log("Failed to remove rendered playback file: \(error.localizedDescription)")
-            }
-        }
-
-        self.currentPlaybackFileURL = nil
-    }
-
-    private func makePlaybackFileURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("glosos-tts-\(UUID().uuidString)")
-            .appendingPathExtension("caf")
     }
 
     private func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
@@ -470,8 +351,30 @@ final class SpeechController: NSObject, ObservableObject {
     nonisolated private func log(_ message: String) {
         print("[VoiceStop] \(message)")
     }
-}
 
-private struct RenderedPlayback {
-    let fileURL: URL
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        guard synthesizer === playbackSynthesizer else {
+            return
+        }
+
+        log("Speech synthesis started.")
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        guard synthesizer === playbackSynthesizer else {
+            return
+        }
+
+        log("Speech synthesis finished.")
+        finishPlayback(wasInterrupted: false)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        guard synthesizer === playbackSynthesizer else {
+            return
+        }
+
+        log("Speech synthesis cancelled.")
+        finishPlayback(wasInterrupted: true)
+    }
 }

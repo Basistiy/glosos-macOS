@@ -16,8 +16,6 @@ final class VoiceProcessingIO: @unchecked Sendable {
     private static let outputBus: AudioUnitElement = 0
 
     let clientFormat: AVAudioFormat
-    var playbackCompletionHandler: (@Sendable (UUID) -> Void)?
-
     private let logHandler: @Sendable (String) -> Void
     private let stateLock = NSLock()
     private let asbd: AudioStreamBasicDescription
@@ -27,11 +25,6 @@ final class VoiceProcessingIO: @unchecked Sendable {
     private var inputScratchBuffer: UnsafeMutableRawPointer?
     private var inputScratchCapacity = 0
     private var lastInputRenderError: OSStatus?
-
-    private var playbackSamples: [Float] = []
-    private var playbackFrameIndex = 0
-    private var playbackToken: UUID?
-    private var didNotifyPlaybackCompletion = false
 
     init(logHandler: @escaping @Sendable (String) -> Void) {
         self.logHandler = logHandler
@@ -204,10 +197,6 @@ final class VoiceProcessingIO: @unchecked Sendable {
     func stop() {
         stateLock.lock()
         recognitionRequest = nil
-        playbackSamples.removeAll(keepingCapacity: false)
-        playbackFrameIndex = 0
-        playbackToken = nil
-        didNotifyPlaybackCompletion = false
         let audioUnit = self.audioUnit
         self.audioUnit = nil
         stateLock.unlock()
@@ -220,77 +209,6 @@ final class VoiceProcessingIO: @unchecked Sendable {
         AudioUnitUninitialize(audioUnit)
         AudioComponentInstanceDispose(audioUnit)
         logHandler("Voice processing audio unit stopped.")
-    }
-
-    func schedulePlayback(from fileURL: URL, playbackToken: UUID) throws {
-        let playbackSamples = try makePlaybackSamples(from: fileURL)
-        stateLock.lock()
-        self.playbackSamples = playbackSamples
-        self.playbackFrameIndex = 0
-        self.playbackToken = playbackToken
-        self.didNotifyPlaybackCompletion = false
-        stateLock.unlock()
-    }
-
-    func stopPlayback() {
-        stateLock.lock()
-        playbackSamples.removeAll(keepingCapacity: false)
-        playbackFrameIndex = 0
-        playbackToken = nil
-        didNotifyPlaybackCompletion = true
-        stateLock.unlock()
-    }
-
-    private func makePlaybackSamples(from fileURL: URL) throws -> [Float] {
-        let audioFile = try AVAudioFile(forReading: fileURL)
-        let sourceFormat = audioFile.processingFormat
-        let inputFrameCapacity = AVAudioFrameCount(max(audioFile.length, 1))
-
-        guard let sourceBuffer = AVAudioPCMBuffer(pcmFormat: sourceFormat, frameCapacity: inputFrameCapacity) else {
-            throw VoiceStopError.playbackBufferAllocationFailed
-        }
-
-        try audioFile.read(into: sourceBuffer)
-
-        let convertedBuffer: AVAudioPCMBuffer
-        if sourceFormat == clientFormat {
-            convertedBuffer = sourceBuffer
-        } else {
-            guard let converter = AVAudioConverter(from: sourceFormat, to: clientFormat) else {
-                throw VoiceStopError.playbackConversionFailed("Could not create playback format converter.")
-            }
-
-            let capacityRatio = clientFormat.sampleRate / sourceFormat.sampleRate
-            let outputFrameCapacity = AVAudioFrameCount(max(1, ceil(Double(sourceBuffer.frameLength) * capacityRatio) + 1))
-            guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: clientFormat, frameCapacity: outputFrameCapacity) else {
-                throw VoiceStopError.playbackBufferAllocationFailed
-            }
-
-            var conversionError: NSError?
-            var didProvideInput = false
-            let conversionStatus = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
-                if didProvideInput {
-                    outStatus.pointee = .endOfStream
-                    return nil
-                }
-
-                didProvideInput = true
-                outStatus.pointee = .haveData
-                return sourceBuffer
-            }
-
-            if conversionStatus == .error {
-                throw VoiceStopError.playbackConversionFailed(conversionError?.localizedDescription ?? "Unknown conversion failure.")
-            }
-
-            convertedBuffer = outputBuffer
-        }
-
-        guard let channelData = convertedBuffer.floatChannelData?[0] else {
-            throw VoiceStopError.playbackBufferAllocationFailed
-        }
-
-        return Array(UnsafeBufferPointer(start: channelData, count: Int(convertedBuffer.frameLength)))
     }
 
     private func logConfiguredFormats(for audioUnit: AudioUnit) {
@@ -391,46 +309,8 @@ final class VoiceProcessingIO: @unchecked Sendable {
         }
 
         let frameCount = Int(inNumberFrames)
-        var completionToken: UUID?
-
         let buffers = UnsafeMutableAudioBufferListPointer(ioData)
         zero(buffers: buffers, frameCount: frameCount)
-
-        stateLock.lock()
-        let remainingFrames = max(0, playbackSamples.count - playbackFrameIndex)
-        let copyFrames = min(frameCount, remainingFrames)
-
-        if copyFrames > 0 {
-            playbackSamples.withUnsafeBufferPointer { samples in
-                guard let source = samples.baseAddress?.advanced(by: playbackFrameIndex) else {
-                    return
-                }
-
-                for audioBuffer in buffers {
-                    guard let data = audioBuffer.mData?.assumingMemoryBound(to: Float.self) else {
-                        continue
-                    }
-
-                    memcpy(data, source, copyFrames * MemoryLayout<Float>.size)
-                }
-            }
-
-            playbackFrameIndex += copyFrames
-        }
-
-        if playbackFrameIndex >= playbackSamples.count, !didNotifyPlaybackCompletion, let playbackToken {
-            didNotifyPlaybackCompletion = true
-            self.playbackToken = nil
-            self.playbackSamples.removeAll(keepingCapacity: false)
-            self.playbackFrameIndex = 0
-            completionToken = playbackToken
-        }
-        stateLock.unlock()
-
-        if let completionToken {
-            playbackCompletionHandler?(completionToken)
-        }
-
         return noErr
     }
 
@@ -488,26 +368,17 @@ private let voiceProcessingOutputCallback: AURenderCallback = { inRefCon, _, _, 
 
 enum VoiceStopError: LocalizedError {
     case recognizerUnavailable
-    case unexpectedSynthesisBuffer
     case audioUnitComponentUnavailable
     case audioUnitOperationFailed(operation: String, status: OSStatus)
-    case playbackBufferAllocationFailed
-    case playbackConversionFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .recognizerUnavailable:
             return "Speech recognition is unavailable."
-        case .unexpectedSynthesisBuffer:
-            return "Speech synthesis produced an unexpected buffer type."
         case .audioUnitComponentUnavailable:
             return "VoiceProcessingIO is unavailable on this system."
         case let .audioUnitOperationFailed(operation, status):
             return "\(operation) failed with OSStatus \(status)."
-        case .playbackBufferAllocationFailed:
-            return "Playback buffer allocation failed."
-        case let .playbackConversionFailed(message):
-            return "Playback conversion failed: \(message)"
         }
     }
 }
