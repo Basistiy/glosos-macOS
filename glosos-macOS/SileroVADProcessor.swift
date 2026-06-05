@@ -9,6 +9,7 @@ import Foundation
 @preconcurrency import MLX
 import MLXAudioCore
 import MLXAudioVAD
+import HuggingFace
 
 struct SileroChunkAccumulator {
     static let targetSampleRate = 16_000
@@ -141,6 +142,8 @@ struct VADSpeechStateMachine {
 }
 
 final class SileroVADProcessor: @unchecked Sendable {
+    private static let modelRepository = "mlx-community/silero-vad"
+
     private enum ModelState {
         case idle
         case loading
@@ -208,7 +211,7 @@ final class SileroVADProcessor: @unchecked Sendable {
 
             Task {
                 do {
-                    let model = try await SileroVAD.fromPretrained("mlx-community/silero-vad")
+                    let model = try await self.loadModel()
                     self.processingQueue.async {
                         self.modelState = .ready(model: model, state: nil)
                         self.chunkAccumulator.reset()
@@ -223,6 +226,91 @@ final class SileroVADProcessor: @unchecked Sendable {
                     }
                 }
             }
+        }
+    }
+
+    private func loadModel() async throws -> SileroVAD {
+        guard let repoID = Repo.ID(rawValue: Self.modelRepository) else {
+            throw SileroVADError.invalidRepositoryID(Self.modelRepository)
+        }
+
+        let cache = HubCache.default
+        let modelDirectory = cache.cacheDirectory
+            .appendingPathComponent("mlx-audio")
+            .appendingPathComponent(Self.modelRepository.replacingOccurrences(of: "/", with: "_"))
+
+        if try validateCachedModel(at: modelDirectory, requiredExtension: "safetensors") {
+            return try SileroVAD.fromModelDirectory(modelDirectory)
+        }
+
+        if FileManager.default.fileExists(atPath: modelDirectory.path) {
+            logHandler("Cached Silero VAD files were incomplete. Re-downloading cleanly.")
+            clearCachedModel(at: modelDirectory, repoID: repoID, cache: cache)
+        }
+
+        try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+
+        let progressReporter = ModelDownloadProgressReporter(modelName: "Silero VAD", logHandler: logHandler)
+        let client = HubClient(cache: cache)
+
+        _ = try await client.downloadSnapshot(
+            of: repoID,
+            kind: .model,
+            to: modelDirectory,
+            revision: "main",
+            matching: ["*.safetensors", "*.json", "*.txt", "*.wav"],
+            progressHandler: { progress in
+                progressReporter.report(progress)
+            }
+        )
+
+        guard try validateCachedModel(at: modelDirectory, requiredExtension: "safetensors") else {
+            clearCachedModel(at: modelDirectory, repoID: repoID, cache: cache)
+            throw ModelUtilsError.incompleteDownload(Self.modelRepository)
+        }
+
+        return try SileroVAD.fromModelDirectory(modelDirectory)
+    }
+
+    private func validateCachedModel(at modelDirectory: URL, requiredExtension: String) throws -> Bool {
+        guard FileManager.default.fileExists(atPath: modelDirectory.path) else {
+            return false
+        }
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: modelDirectory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        )
+
+        let hasRequiredFile = files.contains { file in
+            guard file.pathExtension == requiredExtension else {
+                return false
+            }
+
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return size > 0
+        }
+
+        guard hasRequiredFile else {
+            return false
+        }
+
+        let configURL = modelDirectory.appendingPathComponent("config.json")
+        guard FileManager.default.fileExists(atPath: configURL.path) else {
+            return false
+        }
+
+        let configData = try Data(contentsOf: configURL)
+        _ = try JSONSerialization.jsonObject(with: configData)
+        return true
+    }
+
+    private func clearCachedModel(at modelDirectory: URL, repoID: Repo.ID, cache: HubCache) {
+        try? FileManager.default.removeItem(at: modelDirectory)
+
+        let hubRepoDirectory = cache.repoDirectory(repo: repoID, kind: .model)
+        if FileManager.default.fileExists(atPath: hubRepoDirectory.path) {
+            try? FileManager.default.removeItem(at: hubRepoDirectory)
         }
     }
 
@@ -286,5 +374,36 @@ final class SileroVADProcessor: @unchecked Sendable {
                 self.stateMachine.reset()
             }
         }
+    }
+}
+
+private final class ModelDownloadProgressReporter: @unchecked Sendable {
+    private let modelName: String
+    private let logHandler: @Sendable (String) -> Void
+    private let lock = NSLock()
+    private var lastLoggedBucket = -1
+
+    init(modelName: String, logHandler: @escaping @Sendable (String) -> Void) {
+        self.modelName = modelName
+        self.logHandler = logHandler
+    }
+
+    func report(_ progress: Progress) {
+        guard progress.totalUnitCount > 0 else {
+            return
+        }
+
+        let fraction = Double(progress.completedUnitCount) / Double(progress.totalUnitCount)
+        let bucket = min(Int((fraction * 100).rounded(.down) / 10) * 10, 100)
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard bucket > lastLoggedBucket else {
+            return
+        }
+
+        lastLoggedBucket = bucket
+        logHandler("Downloading \(modelName): \(bucket)%")
     }
 }

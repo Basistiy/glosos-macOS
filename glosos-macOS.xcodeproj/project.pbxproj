@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000011 /* MLXAudioCore */; };
 		F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000012 /* MLXAudioVAD */; };
+		F0A1B2C32FD6000000000003 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000013 /* HuggingFace */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F0A1B2C32FD6000000000003 /* HuggingFace in Frameworks */,
 				F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */,
 				F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */,
 			);
@@ -119,6 +121,7 @@
 			);
 			name = "glosos-macOS";
 			packageProductDependencies = (
+				F0A1B2C32FD6000000000013 /* HuggingFace */,
 				F0A1B2C32FD6000000000011 /* MLXAudioCore */,
 				F0A1B2C32FD6000000000012 /* MLXAudioVAD */,
 			);
@@ -205,6 +208,7 @@
 			mainGroup = 1EF1C5E42FD0B8610011923D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				F0A1B2C32FD6000000000022 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -410,7 +414,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X5WN5QWLF8;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -446,7 +450,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = X5WN5QWLF8;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
 				ENABLE_PREVIEWS = YES;
@@ -603,6 +607,14 @@
 				kind = branch;
 			};
 		};
+		F0A1B2C32FD6000000000022 /* XCRemoteSwiftPackageReference "swift-huggingface" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-huggingface.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -615,6 +627,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
 			productName = MLXAudioVAD;
+		};
+		F0A1B2C32FD6000000000013 /* HuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A1B2C32FD6000000000022 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
+			productName = HuggingFace;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

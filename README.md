@@ -1,28 +1,32 @@
 # glosos-macOS
 Glosos voice agent for Mac OS
 
-## Connect to the local Glosos container
+## Run the local Glosos container
 
-This app can connect to the standalone websocket runtime in:
+The app can now manage the local backend for you with Apple's `container` CLI.
 
-`/Users/evgeniibasistyi/Documents/GitHub/glosos-google-user`
+Requirements:
 
-Start that service first:
+- Apple silicon Mac
+- macOS 26 or newer
+- Apple's `container` CLI installed from:
+  [github.com/apple/container/releases](https://github.com/apple/container/releases)
+
+After installing the CLI once, start its system service:
 
 ```bash
-cd /Users/evgeniibasistyi/Documents/GitHub/glosos-google-user
-docker compose up --build
+container system start
 ```
-
-On this machine, the standalone local-agent container is currently available on:
-
-`ws://127.0.0.1:18000/ws`
-
-`localhost:8000` is already occupied by the main `glosos-google-gateway`, so use the websocket URL above unless you remap ports in the container repo.
 
 The app now lets you:
 
+- pull and run `ghcr.io/basistiy/glosos-google-user:latest`
+- publish the backend on `127.0.0.1:18000`
+- connect automatically to `ws://127.0.0.1:18000/ws`
+- switch back to a manual websocket URL if needed
 - connect and disconnect from the local websocket agent
 - send a typed prompt or the current live transcript
 - view streamed agent output and websocket events
 - speak the agent's final reply with Apple TTS
+
+If the CLI is missing, the app shows setup guidance in Settings.

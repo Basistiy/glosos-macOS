@@ -7,6 +7,74 @@
 
 import Foundation
 
+struct AgentEndpoint: Equatable {
+    static let defaultLocalBaseURLString = "http://127.0.0.1:18000"
+
+    let baseURL: URL
+
+    init(baseURL: URL) {
+        self.baseURL = baseURL
+    }
+
+    init?(rawValue: String) {
+        guard let normalized = Self.normalizedString(from: rawValue),
+              let baseURL = URL(string: normalized) else {
+            return nil
+        }
+
+        self.baseURL = baseURL
+    }
+
+    var displayString: String {
+        baseURL.absoluteString
+    }
+
+    var healthURL: URL {
+        baseURL.appendingPathComponent("healthz")
+    }
+
+    var messageURL: URL {
+        baseURL.appendingPathComponent("message")
+    }
+
+    static func normalizedString(from rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased() else {
+            return nil
+        }
+
+        switch scheme {
+        case "ws":
+            components.scheme = "http"
+        case "wss":
+            components.scheme = "https"
+        case "http", "https":
+            break
+        default:
+            return nil
+        }
+
+        components.query = nil
+        components.fragment = nil
+
+        let path = components.percentEncodedPath
+        if path == "/ws" {
+            components.percentEncodedPath = ""
+        } else if path.hasSuffix("/ws") {
+            components.percentEncodedPath = String(path.dropLast(3))
+        }
+
+        if components.percentEncodedPath == "/" {
+            components.percentEncodedPath = ""
+        }
+
+        return components.url?.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+}
+
 struct ChatMessage: Identifiable, Equatable {
     enum Role: String {
         case user

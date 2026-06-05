@@ -8,12 +8,79 @@
 import Combine
 import Foundation
 
+protocol AgentServiceClient {
+    func checkHealth(at endpoint: AgentEndpoint) async throws
+    func streamMessage(
+        _ payload: OutboundMessage,
+        to endpoint: AgentEndpoint,
+        onEvent: @escaping @Sendable (AgentEvent) async -> Void
+    ) async throws
+}
+
+struct URLSessionAgentServiceClient: AgentServiceClient {
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func checkHealth(at endpoint: AgentEndpoint) async throws {
+        var request = URLRequest(url: endpoint.healthURL)
+        request.timeoutInterval = 5
+
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response, fallbackMessage: "Health check failed.")
+    }
+
+    func streamMessage(
+        _ payload: OutboundMessage,
+        to endpoint: AgentEndpoint,
+        onEvent: @escaping @Sendable (AgentEvent) async -> Void
+    ) async throws {
+        var request = URLRequest(url: endpoint.messageURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (bytes, response) = try await session.bytes(for: request)
+        try validate(
+            response: response,
+            fallbackMessage: "The agent request failed before streaming started."
+        )
+
+        for try await line in bytes.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+
+            guard let event = try? JSONDecoder().decode(AgentEvent.self, from: Data(trimmed.utf8)) else {
+                throw AgentConnectionError.invalidResponsePayload
+            }
+
+            await onEvent(event)
+        }
+    }
+
+    private func validate(response: URLResponse, fallbackMessage: String) throws {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AgentConnectionError.invalidHTTPResponse
+        }
+
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw AgentConnectionError.httpFailure(
+                statusCode: httpResponse.statusCode,
+                message: HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode),
+                fallback: fallbackMessage
+            )
+        }
+    }
+}
+
 @MainActor
-final class AgentConnectionController: NSObject, ObservableObject {
-    @Published var socketURL = UserDefaults.standard.string(forKey: "agentSocketURL")
-        ?? "ws://127.0.0.1:18000/ws"
-    @Published var sessionID = UserDefaults.standard.string(forKey: "agentSessionID")
-        ?? "macos-local"
+final class AgentConnectionController: ObservableObject {
+    @Published var endpointURL: String
+    @Published var sessionID: String
 
     @Published private(set) var isConnected = false
     @Published private(set) var connectionStatus = "Disconnected"
@@ -21,10 +88,25 @@ final class AgentConnectionController: NSObject, ObservableObject {
     @Published private(set) var isAwaitingAssistantResponse = false
     @Published private(set) var latestCompletedAssistantMessage: ChatMessage?
 
-    private var urlSession: URLSession?
-    private var webSocketTask: URLSessionWebSocketTask?
+    private let userDefaults: UserDefaults
+    private let serviceClient: AgentServiceClient
+    private var activeRequestTask: Task<Void, Never>?
     private var userInitiatedDisconnect = false
     private var activeAssistantMessageID: UUID?
+
+    private static let endpointURLKey = "agentEndpointURL"
+    private static let legacySocketURLKey = "agentSocketURL"
+    private static let sessionIDKey = "agentSessionID"
+
+    init(
+        userDefaults: UserDefaults = .standard,
+        serviceClient: AgentServiceClient = URLSessionAgentServiceClient()
+    ) {
+        self.userDefaults = userDefaults
+        self.serviceClient = serviceClient
+        self.endpointURL = Self.loadSavedEndpointURL(from: userDefaults)
+        self.sessionID = userDefaults.string(forKey: Self.sessionIDKey) ?? "macos-local"
+    }
 
     var activeAssistantTurnID: UUID? {
         activeAssistantMessageID
@@ -38,28 +120,33 @@ final class AgentConnectionController: NSObject, ObservableObject {
         return connectionStatus
     }
 
-    func connect() {
-        let trimmedURL = socketURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmedURL), let scheme = url.scheme, ["ws", "wss"].contains(scheme) else {
-            connectionStatus = "Invalid websocket URL"
-            appendSystemMessage("Enter a valid ws:// or wss:// websocket URL.", state: .error)
+    func connect(using overrideEndpointURL: String? = nil) async {
+        let trimmedURL = (overrideEndpointURL ?? endpointURL).trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard let endpoint = AgentEndpoint(rawValue: trimmedURL) else {
+            connectionStatus = "Invalid endpoint URL"
+            appendSystemMessage("Enter a valid http:// or https:// endpoint URL.", state: .error)
             return
         }
 
+        endpointURL = endpoint.displayString
         saveSettings()
         disconnectInternal(reason: nil, shouldReportToChat: false)
         userInitiatedDisconnect = false
-        connectionStatus = "Connecting..."
+        connectionStatus = "Checking endpoint..."
 
-        let session = URLSession(
-            configuration: .default,
-            delegate: self,
-            delegateQueue: nil
-        )
-        let task = session.webSocketTask(with: url)
-        urlSession = session
-        webSocketTask = task
-        task.resume()
+        do {
+            try await serviceClient.checkHealth(at: endpoint)
+            isConnected = true
+            connectionStatus = "Connected"
+        } catch {
+            connectionStatus = "Connection failed"
+            appendSystemMessage(
+                "Could not reach the local agent endpoint: \(error.localizedDescription)",
+                state: .error
+            )
+        }
     }
 
     func disconnect() {
@@ -68,15 +155,27 @@ final class AgentConnectionController: NSObject, ObservableObject {
     }
 
     func saveSettings() {
-        UserDefaults.standard.set(socketURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "agentSocketURL")
-        UserDefaults.standard.set(sessionID.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "agentSessionID")
+        userDefaults.set(
+            endpointURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            forKey: Self.endpointURLKey
+        )
+        userDefaults.set(
+            sessionID.trimmingCharacters(in: .whitespacesAndNewlines),
+            forKey: Self.sessionIDKey
+        )
     }
 
     @discardableResult
     func sendUserMessage(_ text: String) -> Bool {
-        guard let webSocketTask else {
+        guard isConnected else {
             connectionStatus = "Disconnected"
             appendSystemMessage("The app is not connected to the local agent.", state: .error)
+            return false
+        }
+
+        guard let endpoint = AgentEndpoint(rawValue: endpointURL) else {
+            connectionStatus = "Invalid endpoint URL"
+            appendSystemMessage("Enter a valid http:// or https:// endpoint URL.", state: .error)
             return false
         }
 
@@ -96,38 +195,46 @@ final class AgentConnectionController: NSObject, ObservableObject {
         saveSettings()
         let assistantMessageID = beginAssistantTurn(userText: trimmedMessage)
         connectionStatus = "Sending message..."
+        activeRequestTask?.cancel()
+        userInitiatedDisconnect = false
 
-        do {
-            let payload = OutboundMessage(session_id: trimmedSessionID, message: trimmedMessage)
-            let data = try JSONEncoder().encode(payload)
-            guard let text = String(data: data, encoding: .utf8) else {
-                throw AgentConnectionError.encodingFailed
-            }
-
-            webSocketTask.send(.string(text)) { [weak self] error in
-                let controller = self
-                Task { @MainActor in
-                    guard let controller else { return }
-
-                    if let error {
-                        controller.failAssistantTurn(
-                            id: assistantMessageID,
-                            message: "Failed to send message: \(error.localizedDescription)"
-                        )
-                        return
+        let payload = OutboundMessage(session_id: trimmedSessionID, message: trimmedMessage)
+        activeRequestTask = Task { [weak self] in
+            do {
+                try await self?.serviceClient.streamMessage(
+                    payload,
+                    to: endpoint,
+                    onEvent: { [weak self] event in
+                        await MainActor.run {
+                            self?.applyAgentEvent(event)
+                        }
                     }
-
-                    controller.connectionStatus = "Awaiting response..."
+                )
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.handleRequestCancellation()
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.failAssistantTurn(
+                        id: assistantMessageID,
+                        message: "The HTTP request failed: \(error.localizedDescription)"
+                    )
+                    self.isConnected = false
                 }
             }
-            return true
-        } catch {
-            failAssistantTurn(
-                id: assistantMessageID,
-                message: "Could not encode the outgoing websocket message."
-            )
-            return false
+
+            await MainActor.run {
+                guard let self else { return }
+                if self.activeRequestTask?.isCancelled == false {
+                    self.activeRequestTask = nil
+                }
+            }
         }
+
+        return true
     }
 
     @discardableResult
@@ -136,7 +243,9 @@ final class AgentConnectionController: NSObject, ObservableObject {
         let assistantMessageID = UUID()
 
         messages.append(ChatMessage(role: .user, text: trimmedText))
-        messages.append(ChatMessage(id: assistantMessageID, role: .assistant, text: "", state: .streaming))
+        messages.append(
+            ChatMessage(id: assistantMessageID, role: .assistant, text: "", state: .streaming)
+        )
 
         activeAssistantMessageID = assistantMessageID
         isAwaitingAssistantResponse = true
@@ -172,7 +281,9 @@ final class AgentConnectionController: NSObject, ObservableObject {
             return
         }
 
-        if messages.last?.role == .system, messages.last?.text == trimmedText, messages.last?.state == state {
+        if messages.last?.role == .system,
+           messages.last?.text == trimmedText,
+           messages.last?.state == state {
             return
         }
 
@@ -200,8 +311,10 @@ final class AgentConnectionController: NSObject, ObservableObject {
         }
 
         let fallbackText = message(withID: assistantMessageID)?.text ?? ""
-        let resolvedText = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? fallbackText
-        let finalMessageText = resolvedText.isEmpty ? "The agent returned an empty response." : resolvedText
+        let resolvedText =
+            finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? fallbackText
+        let finalMessageText =
+            resolvedText.isEmpty ? "The agent returned an empty response." : resolvedText
 
         updateMessage(id: assistantMessageID) { message in
             message.text = finalMessageText
@@ -214,6 +327,7 @@ final class AgentConnectionController: NSObject, ObservableObject {
 
         activeAssistantMessageID = nil
         isAwaitingAssistantResponse = false
+        activeRequestTask = nil
         connectionStatus = "Connected"
     }
 
@@ -234,19 +348,15 @@ final class AgentConnectionController: NSObject, ObservableObject {
         }
 
         activeAssistantMessageID = nil
+        activeRequestTask = nil
         isAwaitingAssistantResponse = false
         connectionStatus = "Error"
         appendSystemMessage(message, state: .error)
     }
 
     private func disconnectInternal(reason: String?, shouldReportToChat: Bool) {
-        if let webSocketTask {
-            webSocketTask.cancel(with: .normalClosure, reason: nil)
-            self.webSocketTask = nil
-        }
-
-        urlSession?.invalidateAndCancel()
-        urlSession = nil
+        activeRequestTask?.cancel()
+        activeRequestTask = nil
         isConnected = false
         isAwaitingAssistantResponse = false
 
@@ -266,6 +376,19 @@ final class AgentConnectionController: NSObject, ObservableObject {
         if shouldReportToChat, let reason {
             appendSystemMessage(reason, state: .error)
         }
+    }
+
+    private func handleRequestCancellation() {
+        activeRequestTask = nil
+
+        if userInitiatedDisconnect {
+            return
+        }
+
+        disconnectInternal(
+            reason: "The HTTP stream ended unexpectedly.",
+            shouldReportToChat: true
+        )
     }
 
     private func ensureActiveAssistantMessageID() -> UUID {
@@ -292,112 +415,40 @@ final class AgentConnectionController: NSObject, ObservableObject {
         messages.first(where: { $0.id == id })
     }
 
-    deinit {
-        urlSession?.invalidateAndCancel()
+    private static func loadSavedEndpointURL(from userDefaults: UserDefaults) -> String {
+        if let savedEndpoint = userDefaults.string(forKey: endpointURLKey),
+           let normalized = AgentEndpoint.normalizedString(from: savedEndpoint) {
+            return normalized
+        }
+
+        if let legacySocketURL = userDefaults.string(forKey: legacySocketURLKey),
+           let normalized = AgentEndpoint.normalizedString(from: legacySocketURL) {
+            return normalized
+        }
+
+        return AgentEndpoint.defaultLocalBaseURLString
     }
 }
 
-extension AgentConnectionController: URLSessionWebSocketDelegate {
-    nonisolated func urlSession(
-        _ session: URLSession,
-        webSocketTask: URLSessionWebSocketTask,
-        didOpenWithProtocol negotiatedProtocol: String?
-    ) {
-        let _ = negotiatedProtocol
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard self.webSocketTask === webSocketTask else { return }
-
-            self.isConnected = true
-            self.connectionStatus = "Connected"
-            self.startReceiveLoop(for: webSocketTask)
-        }
-    }
-
-    nonisolated func urlSession(
-        _ session: URLSession,
-        webSocketTask: URLSessionWebSocketTask,
-        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
-        reason: Data?
-    ) {
-        let reasonText = reason.flatMap { String(data: $0, encoding: .utf8) }
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard self.webSocketTask === webSocketTask else { return }
-
-            let message: String
-            if self.userInitiatedDisconnect {
-                message = "Disconnected"
-            } else if let reasonText, !reasonText.isEmpty {
-                message = "Websocket closed: \(reasonText)"
-            } else {
-                message = "Websocket closed with code \(closeCode.rawValue)."
-            }
-
-            self.disconnectInternal(
-                reason: message,
-                shouldReportToChat: !self.userInitiatedDisconnect
-            )
-        }
-    }
-
-    private func startReceiveLoop(for task: URLSessionWebSocketTask) {
-        task.receive { [weak self] result in
-            let controller = self
-            Task { @MainActor in
-                guard let controller else { return }
-                guard controller.webSocketTask === task else { return }
-
-                switch result {
-                case .success(let message):
-                    controller.handleReceivedMessage(message)
-                    controller.startReceiveLoop(for: task)
-                case .failure(let error):
-                    let isCleanShutdown = controller.userInitiatedDisconnect || (error as NSError).code == NSURLErrorCancelled
-                    if isCleanShutdown {
-                        controller.disconnectInternal(reason: "Disconnected", shouldReportToChat: false)
-                        return
-                    }
-
-                    controller.disconnectInternal(
-                        reason: "The websocket connection closed unexpectedly.",
-                        shouldReportToChat: true
-                    )
-                }
-            }
-        }
-    }
-
-    private func handleReceivedMessage(_ message: URLSessionWebSocketTask.Message) {
-        let rawText: String
-
-        switch message {
-        case .string(let text):
-            rawText = text
-        case .data(let data):
-            rawText = String(decoding: data, as: UTF8.self)
-        @unknown default:
-            appendSystemMessage("Received an unsupported websocket frame.", state: .error)
-            return
-        }
-
-        guard let event = try? JSONDecoder().decode(AgentEvent.self, from: Data(rawText.utf8)) else {
-            appendSystemMessage("Received an unreadable websocket payload.", state: .error)
-            return
-        }
-
-        applyAgentEvent(event)
-    }
-}
-
-private struct OutboundMessage: Encodable {
+struct OutboundMessage: Encodable, Equatable {
     let type = "message"
     let session_id: String
     let message: String
 }
 
-private enum AgentConnectionError: Error {
-    case encodingFailed
+enum AgentConnectionError: LocalizedError {
+    case invalidHTTPResponse
+    case invalidResponsePayload
+    case httpFailure(statusCode: Int, message: String, fallback: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidHTTPResponse:
+            return "The agent returned an invalid HTTP response."
+        case .invalidResponsePayload:
+            return "The agent returned unreadable streamed JSON events."
+        case let .httpFailure(statusCode, message, fallback):
+            return "\(fallback) HTTP \(statusCode): \(message)"
+        }
+    }
 }

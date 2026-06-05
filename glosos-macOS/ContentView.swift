@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var speechController = SpeechController()
     @StateObject private var agentController = AgentConnectionController()
+    @StateObject private var runtimeController = LocalRuntimeController()
     @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
     @State private var isShowingSettings = false
     @State private var hasInitialized = false
@@ -62,7 +63,12 @@ struct ContentView: View {
         .sheet(isPresented: $isShowingSettings) {
             SettingsSheet(
                 agentController: agentController,
-                autoSpeakAgentReplies: $autoSpeakAgentReplies
+                runtimeController: runtimeController,
+                autoSpeakAgentReplies: $autoSpeakAgentReplies,
+                connectAction: { Task { await connectUsingSelectedRuntime() } },
+                startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
+                stopRuntimeAction: { Task { await stopManagedRuntime() } },
+                restartRuntimeAction: { Task { await restartManagedRuntime() } }
             )
         }
         .task {
@@ -93,6 +99,23 @@ struct ContentView: View {
             if newValue != nil {
                 assistantPlaybackCoordinator.suppress(messageID: agentController.activeAssistantTurnID)
             }
+        }
+        .onChange(of: runtimeController.runtimeMode) { _, _ in
+            guard hasInitialized else {
+                return
+            }
+
+            agentController.disconnect()
+            Task {
+                await runtimeController.refreshStatus()
+            }
+        }
+        .onChange(of: runtimeController.lastRuntimeError) { _, newValue in
+            guard let newValue else {
+                return
+            }
+
+            agentController.appendSystemMessage(newValue, state: .error)
         }
         .onDisappear {
             agentController.disconnect()
@@ -229,7 +252,45 @@ struct ContentView: View {
         hasInitialized = true
         await speechController.preparePermissions()
         await speechController.startContinuousListening()
-        agentController.connect()
+        await runtimeController.refreshStatus()
+        await connectUsingSelectedRuntime()
+    }
+
+    private func connectUsingSelectedRuntime() async {
+        if runtimeController.isManagedMode {
+            let didStart = await runtimeController.startRuntime()
+            guard didStart else {
+                return
+            }
+
+            await agentController.connect(using: runtimeController.computedEndpointURL)
+            return
+        }
+
+        await agentController.connect()
+    }
+
+    private func startManagedRuntimeOnly() async {
+        guard runtimeController.isManagedMode else {
+            return
+        }
+
+        _ = await runtimeController.startRuntime()
+    }
+
+    private func stopManagedRuntime() async {
+        agentController.disconnect()
+        await runtimeController.stopRuntime()
+    }
+
+    private func restartManagedRuntime() async {
+        agentController.disconnect()
+        let didRestart = await runtimeController.restartRuntime()
+        guard didRestart else {
+            return
+        }
+
+        await agentController.connect(using: runtimeController.computedEndpointURL)
     }
 
     private func enqueueOrSend(_ utterance: TranscribedUtterance) {
@@ -360,14 +421,100 @@ private struct ChatBubbleRow: View {
 
 private struct SettingsSheet: View {
     @ObservedObject var agentController: AgentConnectionController
+    @ObservedObject var runtimeController: LocalRuntimeController
     @Binding var autoSpeakAgentReplies: Bool
+    let connectAction: () -> Void
+    let startRuntimeAction: () -> Void
+    let stopRuntimeAction: () -> Void
+    let restartRuntimeAction: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Runtime") {
+                    Picker("Mode", selection: $runtimeController.runtimeMode) {
+                        ForEach(RuntimeMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+
+                    if runtimeController.isManagedMode {
+                        TextField("Image", text: $runtimeController.managedContainerImage)
+                        TextField("Container name", text: $runtimeController.managedContainerName)
+                        TextField("Host port", text: $runtimeController.managedHostPort)
+                        TextField("Container port", text: $runtimeController.managedContainerPort)
+
+                        HStack {
+                            Text("Computed Endpoint URL")
+                            Spacer()
+                            Text(runtimeController.computedEndpointURL)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                        }
+
+                        HStack {
+                            Text("Runtime status")
+                            Spacer()
+                            Text(runtimeController.runtimeStatusDetail)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("Start") {
+                                startRuntimeAction()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(runtimeController.isRuntimeActionDisabled)
+
+                            Button("Stop") {
+                                stopRuntimeAction()
+                            }
+                            .disabled(runtimeController.isRuntimeActionDisabled)
+
+                            Button("Restart") {
+                                restartRuntimeAction()
+                            }
+                            .disabled(runtimeController.isRuntimeActionDisabled)
+                        }
+
+                        if let lastRuntimeError = runtimeController.lastRuntimeError {
+                            Text(lastRuntimeError)
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
+                        }
+
+                        if !runtimeController.recentLogs.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Recent container logs")
+                                    .font(.system(.footnote, design: .rounded).weight(.semibold))
+
+                                ScrollView {
+                                    Text(runtimeController.recentLogs)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .textSelection(.enabled)
+                                }
+                                .frame(minHeight: 120)
+                            }
+                        }
+                    }
+                }
+
                 Section("Connection") {
-                    TextField("WebSocket URL", text: $agentController.socketURL)
+                    if runtimeController.isManagedMode {
+                        HStack {
+                            Text("Endpoint URL")
+                            Spacer()
+                            Text(runtimeController.computedEndpointURL)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    } else {
+                        TextField("Endpoint URL", text: $agentController.endpointURL)
+                    }
+
                     TextField("Session ID", text: $agentController.sessionID)
 
                     HStack {
@@ -379,7 +526,7 @@ private struct SettingsSheet: View {
 
                     HStack(spacing: 12) {
                         Button(agentController.isConnected ? "Reconnect" : "Connect") {
-                            agentController.connect()
+                            connectAction()
                         }
                         .buttonStyle(.borderedProminent)
 
@@ -403,7 +550,7 @@ private struct SettingsSheet: View {
                 }
             }
         }
-        .frame(minWidth: 420, minHeight: 280)
+        .frame(minWidth: 460, minHeight: 420)
         .onDisappear {
             agentController.saveSettings()
         }

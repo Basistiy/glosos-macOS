@@ -27,6 +27,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
     private var inputScratchBuffer: UnsafeMutableRawPointer?
     private var inputScratchCapacity = 0
     private var lastInputRenderError: OSStatus?
+    private var isVoiceProcessingEnabled: Bool?
 
     init(logHandler: @escaping @Sendable (String) -> Void) {
         self.logHandler = logHandler
@@ -97,7 +98,6 @@ final class VoiceProcessingIO: @unchecked Sendable {
         do {
             var streamDescription = asbd
             var maxFramesPerSlice: UInt32 = 4096
-            var bypassVoiceProcessing: UInt32 = 0
             var enableAGC: UInt32 = 1
 
             // VoiceProcessingIO uses bus 0 for speaker output and bus 1 for mic input.
@@ -135,17 +135,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
                 ),
                 operation: "setting VoiceProcessingIO max frames"
             )
-            try checkStatus(
-                AudioUnitSetProperty(
-                    audioUnit,
-                    kAUVoiceIOProperty_BypassVoiceProcessing,
-                    kAudioUnitScope_Global,
-                    0,
-                    &bypassVoiceProcessing,
-                    UInt32(MemoryLayout<UInt32>.size)
-                ),
-                operation: "enabling voice processing"
-            )
+            try setVoiceProcessingEnabled(false, for: audioUnit)
             try checkStatus(
                 AudioUnitSetProperty(
                     audioUnit,
@@ -218,6 +208,19 @@ final class VoiceProcessingIO: @unchecked Sendable {
         AudioUnitUninitialize(audioUnit)
         AudioComponentInstanceDispose(audioUnit)
         logHandler("Voice processing audio unit stopped.")
+    }
+
+    func setVoiceProcessingEnabled(_ isEnabled: Bool) throws {
+        stateLock.lock()
+        let audioUnit = self.audioUnit
+        stateLock.unlock()
+
+        guard let audioUnit else {
+            self.isVoiceProcessingEnabled = isEnabled
+            return
+        }
+
+        try setVoiceProcessingEnabled(isEnabled, for: audioUnit)
     }
 
     private func logConfiguredFormats(for audioUnit: AudioUnit) {
@@ -369,6 +372,28 @@ final class VoiceProcessingIO: @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         return body()
+    }
+
+    private func setVoiceProcessingEnabled(_ isEnabled: Bool, for audioUnit: AudioUnit) throws {
+        guard isVoiceProcessingEnabled != isEnabled else {
+            return
+        }
+
+        var bypassVoiceProcessing: UInt32 = isEnabled ? 0 : 1
+        try checkStatus(
+            AudioUnitSetProperty(
+                audioUnit,
+                kAUVoiceIOProperty_BypassVoiceProcessing,
+                kAudioUnitScope_Global,
+                0,
+                &bypassVoiceProcessing,
+                UInt32(MemoryLayout<UInt32>.size)
+            ),
+            operation: isEnabled ? "enabling voice processing" : "bypassing voice processing"
+        )
+
+        isVoiceProcessingEnabled = isEnabled
+        logHandler(isEnabled ? "Voice processing enabled for playback interruption detection." : "Voice processing bypassed while idle.")
     }
 
     private func checkStatus(_ status: OSStatus, operation: String) throws {

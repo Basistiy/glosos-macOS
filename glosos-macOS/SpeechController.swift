@@ -153,6 +153,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         utterance.voice = speechVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
 
+        do {
+            try voiceProcessingIO.setVoiceProcessingEnabled(true)
+        } catch {
+            log("Could not enable voice processing before playback: \(error.localizedDescription)")
+        }
+
         isPreparingPlayback = false
         isPlaybackAudible = true
         isSpeaking = true
@@ -183,6 +189,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         log("Requires on-device recognition: \(recognitionRequest.requiresOnDeviceRecognition)")
 
         try voiceProcessingIO.startIfNeeded()
+        try voiceProcessingIO.setVoiceProcessingEnabled(false)
         voiceProcessingIO.setRecognitionRequest(recognitionRequest)
         voiceProcessingIO.setCapturedSamplesHandler { [sileroVADProcessor] samples, sampleRate in
             sileroVADProcessor.append(samples: samples, sampleRate: sampleRate)
@@ -280,6 +287,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         if !isListeningContinuously {
             voiceProcessingIO.stop()
+        } else {
+            do {
+                try voiceProcessingIO.setVoiceProcessingEnabled(false)
+            } catch {
+                log("Could not bypass voice processing after playback: \(error.localizedDescription)")
+            }
         }
 
         statusMessage = shouldKeepListening
