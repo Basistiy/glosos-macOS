@@ -14,6 +14,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
     private static let channelCount: AVAudioChannelCount = 1
     private static let inputBus: AudioUnitElement = 1
     private static let outputBus: AudioUnitElement = 0
+    private static let captureSampleRate = Int(sampleRate)
 
     let clientFormat: AVAudioFormat
     private let logHandler: @Sendable (String) -> Void
@@ -22,6 +23,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
 
     private var audioUnit: AudioUnit?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var capturedSamplesHandler: (@Sendable ([Float], Int) -> Void)?
     private var inputScratchBuffer: UnsafeMutableRawPointer?
     private var inputScratchCapacity = 0
     private var lastInputRenderError: OSStatus?
@@ -60,6 +62,12 @@ final class VoiceProcessingIO: @unchecked Sendable {
     func setRecognitionRequest(_ recognitionRequest: SFSpeechAudioBufferRecognitionRequest?) {
         stateLock.lock()
         self.recognitionRequest = recognitionRequest
+        stateLock.unlock()
+    }
+
+    func setCapturedSamplesHandler(_ capturedSamplesHandler: (@Sendable ([Float], Int) -> Void)?) {
+        stateLock.lock()
+        self.capturedSamplesHandler = capturedSamplesHandler
         stateLock.unlock()
     }
 
@@ -197,6 +205,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
     func stop() {
         stateLock.lock()
         recognitionRequest = nil
+        capturedSamplesHandler = nil
         let audioUnit = self.audioUnit
         self.audioUnit = nil
         stateLock.unlock()
@@ -286,17 +295,35 @@ final class VoiceProcessingIO: @unchecked Sendable {
             return status
         }
 
-        guard let recognitionRequest = withStateLock({ self.recognitionRequest }) else {
+        let (recognitionRequest, capturedSamplesHandler) = withStateLock {
+            (self.recognitionRequest, self.capturedSamplesHandler)
+        }
+
+        guard recognitionRequest != nil || capturedSamplesHandler != nil else {
             return noErr
         }
 
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: clientFormat, frameCapacity: inNumberFrames) else {
+        guard let source = audioBufferList.mBuffers.mData else {
             return noErr
         }
 
-        pcmBuffer.frameLength = inNumberFrames
-        if let destination = pcmBuffer.floatChannelData?[0], let source = audioBufferList.mBuffers.mData {
-            memcpy(destination, source, Int(inNumberFrames) * MemoryLayout<Float>.size)
+        let sampleCount = Int(inNumberFrames)
+
+        if let capturedSamplesHandler {
+            let samples = Array(
+                UnsafeBufferPointer(
+                    start: source.assumingMemoryBound(to: Float.self),
+                    count: sampleCount
+                )
+            )
+            capturedSamplesHandler(samples, Self.captureSampleRate)
+        }
+
+        if let recognitionRequest,
+           let pcmBuffer = AVAudioPCMBuffer(pcmFormat: clientFormat, frameCapacity: inNumberFrames),
+           let destination = pcmBuffer.floatChannelData?[0] {
+            pcmBuffer.frameLength = inNumberFrames
+            memcpy(destination, source, sampleCount * MemoryLayout<Float>.size)
             recognitionRequest.append(pcmBuffer)
         }
 

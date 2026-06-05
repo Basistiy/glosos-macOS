@@ -21,6 +21,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let speechVoice = AVSpeechSynthesisVoice(language: "en-US")
     private let voiceProcessingIO: VoiceProcessingIO
+    private let sileroVADProcessor: SileroVADProcessor
 
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -33,14 +34,29 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private var lastLoggedTranscript = ""
     private var shouldKeepListening = false
     private var listenerRestartTask: Task<Void, Never>?
-    private var didEmitFinalUtteranceForCurrentSession = false
+    private var vadSpeechEndTask: Task<Void, Never>?
+    private var speechTurnCoordinator = SpeechTurnCoordinator()
 
     override init() {
+        sileroVADProcessor = SileroVADProcessor(logHandler: { message in
+            print("[VoiceStop] \(message)")
+        })
         voiceProcessingIO = VoiceProcessingIO(logHandler: { message in
             print("[VoiceStop] \(message)")
         })
         super.init()
         playbackSynthesizer.delegate = self
+        sileroVADProcessor.onSpeechStarted = { [weak self] in
+            Task { @MainActor in
+                self?.handleVADSpeechStarted()
+            }
+        }
+        sileroVADProcessor.onSpeechEnded = { [weak self] in
+            Task { @MainActor in
+                self?.handleVADSpeechEnded()
+            }
+        }
+        sileroVADProcessor.loadModelIfNeeded()
     }
 
     var isCapturingSpeech: Bool {
@@ -70,6 +86,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         log("Speech auth: \(describe(speechStatus))")
         log("Microphone auth: \(microphoneGranted ? "granted" : "denied")")
         log("Recognizer available: \(recognizerAvailable)")
+        sileroVADProcessor.loadModelIfNeeded()
 
         canListenForTranscription = speechStatus == .authorized && microphoneGranted && recognizerAvailable
 
@@ -115,6 +132,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         shouldKeepListening = false
         listenerRestartTask?.cancel()
         listenerRestartTask = nil
+        vadSpeechEndTask?.cancel()
+        vadSpeechEndTask = nil
         stopListening(reason: "view disappeared", shouldLog: false)
     }
 
@@ -151,7 +170,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             throw VoiceStopError.recognizerUnavailable
         }
 
-        didEmitFinalUtteranceForCurrentSession = false
+        speechTurnCoordinator.reset()
+        vadSpeechEndTask?.cancel()
+        vadSpeechEndTask = nil
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = true
@@ -163,6 +184,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         try voiceProcessingIO.startIfNeeded()
         voiceProcessingIO.setRecognitionRequest(recognitionRequest)
+        voiceProcessingIO.setCapturedSamplesHandler { [sileroVADProcessor] samples, sampleRate in
+            sileroVADProcessor.append(samples: samples, sampleRate: sampleRate)
+        }
+        sileroVADProcessor.loadModelIfNeeded()
+        sileroVADProcessor.resetSession()
 
         isListeningContinuously = true
         isShuttingDownListener = false
@@ -199,6 +225,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func handleRecognitionSessionEnded(error: Error?, isFinal: Bool) {
+        finalizePendingVADSpeechSegment(force: true)
         stopListening(reason: "recognition completed", shouldLog: error == nil && isFinal)
 
         guard shouldKeepListening else {
@@ -222,26 +249,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         log("Transcript: \(transcript)")
         liveTranscript = transcript
 
-        guard hasRecognizedContent(in: transcript) else {
-            if isFinal {
-                liveTranscript = "Waiting for speech..."
-            }
-            return
-        }
-
-        if isPlaybackAudible {
-            playbackInterruptionToken = UUID()
-            log("Detected spoken interruption in transcript.")
-            stopPlayback()
-        }
-
-        guard isFinal, !didEmitFinalUtteranceForCurrentSession else {
-            return
-        }
-
-        didEmitFinalUtteranceForCurrentSession = true
-        finalizedUtterance = TranscribedUtterance(text: transcript.trimmingCharacters(in: .whitespacesAndNewlines))
-        liveTranscript = "Waiting for speech..."
+        let update = speechTurnCoordinator.recordTranscript(
+            transcript,
+            hasRecognizedContent: hasRecognizedContent(in: transcript),
+            usingVAD: sileroVADProcessor.isReady,
+            isFinal: isFinal,
+            isPlaybackAudible: isPlaybackAudible
+        )
+        applySpeechTurnUpdate(update, interruptionLogMessage: "Detected spoken interruption in transcript.")
     }
 
     private func stopPlayback() {
@@ -250,7 +265,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         log("Stopping playback.")
-        if shouldKeepListening, isListeningContinuously {
+        if !sileroVADProcessor.isReady, shouldKeepListening, isListeningContinuously {
             stopListening(reason: "refreshing recognition after interruption", shouldLog: false)
         }
         if !playbackSynthesizer.stopSpeaking(at: .immediate) {
@@ -294,6 +309,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         voiceProcessingIO.setRecognitionRequest(nil)
+        voiceProcessingIO.setCapturedSamplesHandler(nil)
+        sileroVADProcessor.resetSession()
+        vadSpeechEndTask?.cancel()
+        vadSpeechEndTask = nil
+        speechTurnCoordinator.reset()
 
         if !isPlaybackAudible, !isPreparingPlayback {
             voiceProcessingIO.stop()
@@ -361,6 +381,59 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     private func hasRecognizedContent(in transcript: String) -> Bool {
         transcript.contains { !$0.isWhitespace && !$0.isPunctuation }
+    }
+
+    private func handleVADSpeechStarted() {
+        vadSpeechEndTask?.cancel()
+        vadSpeechEndTask = nil
+        let update = speechTurnCoordinator.speechStarted(
+            isPlaybackAudible: isPlaybackAudible,
+            now: Date().timeIntervalSinceReferenceDate
+        )
+        applySpeechTurnUpdate(update, interruptionLogMessage: "Detected spoken interruption from Silero VAD.")
+    }
+
+    private func handleVADSpeechEnded() {
+        let update = speechTurnCoordinator.speechEnded(now: Date().timeIntervalSinceReferenceDate)
+        applySpeechTurnUpdate(update, interruptionLogMessage: nil)
+
+        vadSpeechEndTask?.cancel()
+        vadSpeechEndTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                self?.finalizePendingVADSpeechSegment()
+            }
+        }
+    }
+
+    private func finalizePendingVADSpeechSegment(force: Bool = false) {
+        let update = speechTurnCoordinator.finalizePendingSpeechIfNeeded(
+            now: Date().timeIntervalSinceReferenceDate,
+            force: force
+        )
+        applySpeechTurnUpdate(update, interruptionLogMessage: nil)
+    }
+
+    private func applySpeechTurnUpdate(_ update: SpeechTurnUpdate, interruptionLogMessage: String?) {
+        if update.shouldInterruptPlayback {
+            playbackInterruptionToken = UUID()
+            if let interruptionLogMessage {
+                log(interruptionLogMessage)
+            }
+            stopPlayback()
+        }
+
+        if let finalizedText = update.finalizedText {
+            finalizedUtterance = TranscribedUtterance(text: finalizedText)
+        }
+
+        if update.shouldClearTranscript {
+            liveTranscript = "Waiting for speech..."
+        }
     }
 
     private func describe(_ status: SFSpeechRecognizerAuthorizationStatus) -> String {

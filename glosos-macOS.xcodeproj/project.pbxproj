@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000011 /* MLXAudioCore */; };
+		F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000012 /* MLXAudioVAD */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		1EF1C5FB2FD0B8620011923D /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */,
+				F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,8 @@
 			);
 			name = "glosos-macOS";
 			packageProductDependencies = (
+				F0A1B2C32FD6000000000011 /* MLXAudioCore */,
+				F0A1B2C32FD6000000000012 /* MLXAudioVAD */,
 			);
 			productName = "glosos-macOS";
 			productReference = 1EF1C5ED2FD0B8610011923D /* glosos-macOS.app */;
@@ -195,6 +204,9 @@
 			);
 			mainGroup = 1EF1C5E42FD0B8610011923D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1EF1C5EE2FD0B8610011923D /* Products */;
 			projectDirPath = "";
@@ -581,6 +593,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Blaizzy/mlx-audio-swift.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F0A1B2C32FD6000000000011 /* MLXAudioCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioCore;
+		};
+		F0A1B2C32FD6000000000012 /* MLXAudioVAD */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioVAD;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 1EF1C5E52FD0B8610011923D /* Project object */;
 }
