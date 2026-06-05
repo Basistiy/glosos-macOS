@@ -18,7 +18,8 @@ struct LocalRuntimeControllerTests {
         let controller = LocalRuntimeController(
             userDefaults: defaults,
             supportChecker: StubSupportChecker(status: .unsupported(message: "Unavailable")),
-            commandRunner: RecordingCommandRunner(results: []),
+            assetManager: StubAssetManager(),
+            runtimeManager: StubRuntimeManager(),
             healthChecker: ImmediateHealthChecker(isHealthy: false)
         )
 
@@ -34,7 +35,8 @@ struct LocalRuntimeControllerTests {
         let controller = LocalRuntimeController(
             userDefaults: defaults,
             supportChecker: StubSupportChecker(status: .unsupported(message: "Unavailable")),
-            commandRunner: RecordingCommandRunner(results: []),
+            assetManager: StubAssetManager(),
+            runtimeManager: StubRuntimeManager(),
             healthChecker: ImmediateHealthChecker(isHealthy: false)
         )
 
@@ -43,83 +45,85 @@ struct LocalRuntimeControllerTests {
 
     @Test
     @MainActor
-    func managedRuntimeStartUsesExpectedAppleContainerCommands() async throws {
+    func managedRuntimeStartUsesPreparedAssetsAndPublishesEndpoint() async throws {
         let defaults = makeIsolatedDefaults()
-        let commandRunner = RecordingCommandRunner(results: [
-            .success(CommandResult(exitCode: 0, stdout: "", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "[]", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "glosos-google-user-macos\n", stderr: ""))
-        ])
+        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
+        defaults.set("secret", forKey: "managedGoogleAPIKey")
+
+        let assetManager = StubAssetManager()
+        let runtimeManager = StubRuntimeManager(
+            startResult: .success(
+                ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)
+            )
+        )
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(
-                status: .supported(executableURL: URL(fileURLWithPath: "/usr/local/bin/container"))
-            ),
-            commandRunner: commandRunner,
+            supportChecker: StubSupportChecker(status: .supported),
+            assetManager: assetManager,
+            runtimeManager: runtimeManager,
             healthChecker: ImmediateHealthChecker(isHealthy: true)
         )
 
         let didStart = await controller.startRuntime()
+        let prepareCalls = await assetManager.prepareCalls
+        let startInvocation = await runtimeManager.startInvocation
 
         #expect(didStart)
         #expect(controller.runtimeState == .running)
-        #expect(controller.runtimeStatusDetail == "Running at http://127.0.0.1:18000")
-        #expect(commandRunner.invocations.map(\.arguments) == [
-            ["system", "start"],
-            ["ls", "--format", "json", "--all"],
-            ["image", "delete", "ghcr.io/basistiy/glosos-google-user:latest"],
-            [
-                "run",
-                "--name", "glosos-google-user-macos",
-                "--detach",
-                "--rm",
-                "-p", "127.0.0.1:18000:8000",
-                "ghcr.io/basistiy/glosos-google-user:latest"
-            ]
-        ])
+        #expect(controller.currentManagedEndpoint == ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000))
+        #expect(controller.runtimeStatusDetail == "Running at http://192.168.64.2:8000")
+        #expect(prepareCalls == 1)
+        #expect(startInvocation?.configuration.image == "ghcr.io/basistiy/glosos-google-user:latest")
+        #expect(startInvocation?.configuration.containerName == "glosos-google-user-macos")
+        #expect(startInvocation?.configuration.modelName == "gemini-2.5-flash")
+        #expect(startInvocation?.configuration.googleAPIKey == "secret")
+        #expect(startInvocation?.assets == StubAssetManager.sampleAssets)
     }
 
     @Test
     @MainActor
     func managedRuntimeStartFailsWhenEndpointNeverBecomesHealthy() async throws {
         let defaults = makeIsolatedDefaults()
-        let commandRunner = RecordingCommandRunner(results: [
-            .success(CommandResult(exitCode: 0, stdout: "", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "[]", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "glosos-google-user-macos\n", stderr: "")),
-            .success(CommandResult(exitCode: 0, stdout: "container logs", stderr: ""))
-        ])
+        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
+        defaults.set("secret", forKey: "managedGoogleAPIKey")
+
+        let assetManager = StubAssetManager(logs: "boot failed")
+        let runtimeManager = StubRuntimeManager(
+            startResult: .success(
+                ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)
+            )
+        )
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(
-                status: .supported(executableURL: URL(fileURLWithPath: "/usr/local/bin/container"))
-            ),
-            commandRunner: commandRunner,
+            supportChecker: StubSupportChecker(status: .supported),
+            assetManager: assetManager,
+            runtimeManager: runtimeManager,
             healthChecker: ImmediateHealthChecker(isHealthy: false)
         )
 
         let didStart = await controller.startRuntime()
+        let stopCalls = await runtimeManager.stopCalls
 
         #expect(didStart == false)
         #expect(controller.runtimeState == .failed)
-        #expect(controller.lastRuntimeError == "Container started, but the HTTP endpoint never became ready.")
-        #expect(controller.recentLogs == "container logs")
+        #expect(controller.lastRuntimeError == "Container started, but the runtime endpoint never became ready.")
+        #expect(controller.recentLogs == "boot failed")
+        #expect(stopCalls == ["glosos-google-user-macos"])
     }
 
     @Test
     @MainActor
-    func missingAppleContainerCliShowsInstallGuidance() async throws {
+    func missingAppleContainerSupportShowsGuidance() async throws {
         let defaults = makeIsolatedDefaults()
         let controller = LocalRuntimeController(
             userDefaults: defaults,
             supportChecker: StubSupportChecker(
-                status: .unsupported(message: "Install Apple's container CLI.")
+                status: .unsupported(message: "Managed containers require macOS 26 or newer.")
             ),
-            commandRunner: RecordingCommandRunner(results: []),
+            assetManager: StubAssetManager(),
+            runtimeManager: StubRuntimeManager(),
             healthChecker: ImmediateHealthChecker(isHealthy: false)
         )
 
@@ -127,7 +131,50 @@ struct LocalRuntimeControllerTests {
 
         #expect(didStart == false)
         #expect(controller.runtimeState == .unsupported)
-        #expect(controller.lastRuntimeError == "Install Apple's container CLI.")
+        #expect(controller.lastRuntimeError == "Managed containers require macOS 26 or newer.")
+    }
+
+    @Test
+    @MainActor
+    func refreshStatusDoesNotTreatMissingManagedCredentialsAsFailure() async throws {
+        let defaults = makeIsolatedDefaults()
+        let controller = LocalRuntimeController(
+            userDefaults: defaults,
+            supportChecker: StubSupportChecker(status: .supported),
+            assetManager: StubAssetManager(),
+            runtimeManager: StubRuntimeManager(),
+            healthChecker: ImmediateHealthChecker(isHealthy: false)
+        )
+
+        await controller.refreshStatus()
+
+        #expect(controller.runtimeState == .stopped)
+        #expect(controller.lastRuntimeError == nil)
+        #expect(controller.runtimeStatusDetail == "Managed runtime is waiting for a Google API key.")
+    }
+
+    @Test
+    @MainActor
+    func storagePreparationFailureSurfacesUnsupportedMessage() async throws {
+        let defaults = makeIsolatedDefaults()
+        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
+        defaults.set("secret", forKey: "managedGoogleAPIKey")
+
+        let controller = LocalRuntimeController(
+            userDefaults: defaults,
+            supportChecker: StubSupportChecker(status: .supported),
+            assetManager: StubAssetManager(
+                prepareError: RuntimePreparationError.unsupported("Storage unavailable.")
+            ),
+            runtimeManager: StubRuntimeManager(),
+            healthChecker: ImmediateHealthChecker(isHealthy: false)
+        )
+
+        let didStart = await controller.startRuntime()
+
+        #expect(didStart == false)
+        #expect(controller.runtimeState == .unsupported)
+        #expect(controller.lastRuntimeError == "Storage unavailable.")
     }
 
     private func makeIsolatedDefaults() -> UserDefaults {
@@ -138,46 +185,101 @@ struct LocalRuntimeControllerTests {
     }
 }
 
-private struct StubSupportChecker: AppleContainerSupportChecking {
-    let status: AppleContainerSupportStatus
+private struct StubSupportChecker: ContainerizationSupportChecking {
+    let status: ContainerizationSupportStatus
 
-    func currentSupportStatus() -> AppleContainerSupportStatus {
+    func currentSupportStatus() -> ContainerizationSupportStatus {
         status
     }
 }
 
-@MainActor
-private final class RecordingCommandRunner: CommandRunning {
-    struct Invocation: Equatable {
-        let executableURL: URL
-        let arguments: [String]
+actor StubAssetManager: ContainerAssetManaging {
+    static let sampleAssets = ContainerRuntimeAssets(
+        supportRootURL: URL(fileURLWithPath: "/tmp/glosos"),
+        imageStoreURL: URL(fileURLWithPath: "/tmp/glosos/image-store"),
+        kernelDirectoryURL: URL(fileURLWithPath: "/tmp/glosos/kernel"),
+        kernelURL: URL(fileURLWithPath: "/tmp/glosos/kernel/vmlinux"),
+        logsDirectoryURL: URL(fileURLWithPath: "/tmp/glosos/logs"),
+        userWorkspaceURL: URL(fileURLWithPath: "/tmp/glosos/user")
+    )
+
+    var prepareCalls = 0
+    private let prepareError: Error?
+    private let logs: String
+
+    init(prepareError: Error? = nil, logs: String = "") {
+        self.prepareError = prepareError
+        self.logs = logs
     }
 
-    private var queuedResults: [Result<CommandResult, Error>]
-    private(set) var invocations: [Invocation] = []
-
-    init(results: [Result<CommandResult, Error>]) {
-        self.queuedResults = results
+    func existingAssets() throws -> ContainerRuntimeAssets? {
+        Self.sampleAssets
     }
 
-    func run(executableURL: URL, arguments: [String]) async throws -> CommandResult {
-        invocations.append(Invocation(executableURL: executableURL, arguments: arguments))
-
-        guard !queuedResults.isEmpty else {
-            Issue.record("No queued command result for \(arguments.joined(separator: " "))")
-            return CommandResult(exitCode: 1, stdout: "", stderr: "Missing stub result.")
+    func prepareAssets(
+        updateStatus: @escaping @Sendable (String) async -> Void
+    ) async throws -> ContainerRuntimeAssets {
+        prepareCalls += 1
+        await updateStatus("Preparing app support storage...")
+        if let prepareError {
+            throw prepareError
         }
+        return Self.sampleAssets
+    }
 
-        let nextResult = queuedResults.removeFirst()
-        return try nextResult.get()
+    func recentLogs(
+        containerName: String,
+        assets: ContainerRuntimeAssets?
+    ) async -> String {
+        let _ = containerName
+        let _ = assets
+        return logs
+    }
+}
+
+actor StubRuntimeManager: ContainerRuntimeManaging {
+    struct StartInvocation {
+        let configuration: ManagedContainerConfiguration
+        let assets: ContainerRuntimeAssets
+    }
+
+    private let startResult: Result<ManagedRuntimeEndpoint, Error>
+    private(set) var startInvocation: StartInvocation?
+    private(set) var stopCalls: [String] = []
+
+    init(startResult: Result<ManagedRuntimeEndpoint, Error> = .failure(RuntimePreparationError.failed("Not started"))) {
+        self.startResult = startResult
+    }
+
+    func currentEndpoint(containerName: String) async -> ManagedRuntimeEndpoint? {
+        let _ = containerName
+        return nil
+    }
+
+    func start(
+        configuration: ManagedContainerConfiguration,
+        assets: ContainerRuntimeAssets,
+        updateStatus: @escaping @Sendable (String) async -> Void
+    ) async throws -> ManagedRuntimeEndpoint {
+        startInvocation = StartInvocation(configuration: configuration, assets: assets)
+        await updateStatus("Starting container...")
+        return try startResult.get()
+    }
+
+    func stop(
+        containerName: String,
+        assets: ContainerRuntimeAssets?
+    ) async {
+        let _ = assets
+        stopCalls.append(containerName)
     }
 }
 
 private struct ImmediateHealthChecker: LocalRuntimeHealthChecking {
     let isHealthy: Bool
 
-    func waitUntilHealthy(baseURL: URL, timeoutSeconds: TimeInterval) async -> Bool {
-        let _ = baseURL
+    func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool {
+        let _ = endpoint
         let _ = timeoutSeconds
         return isHealthy
     }

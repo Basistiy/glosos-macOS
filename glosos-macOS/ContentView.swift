@@ -258,12 +258,16 @@ struct ContentView: View {
 
     private func connectUsingSelectedRuntime() async {
         if runtimeController.isManagedMode {
-            let didStart = await runtimeController.startRuntime()
-            guard didStart else {
+            guard runtimeController.isManagedRuntimeConfigured else {
                 return
             }
 
-            await agentController.connect(using: runtimeController.computedEndpointURL)
+            let didStart = await runtimeController.startRuntime()
+            guard didStart, let endpoint = runtimeController.currentManagedEndpoint else {
+                return
+            }
+
+            await agentController.connect(using: endpoint)
             return
         }
 
@@ -286,11 +290,11 @@ struct ContentView: View {
     private func restartManagedRuntime() async {
         agentController.disconnect()
         let didRestart = await runtimeController.restartRuntime()
-        guard didRestart else {
+        guard didRestart, let endpoint = runtimeController.currentManagedEndpoint else {
             return
         }
 
-        await agentController.connect(using: runtimeController.computedEndpointURL)
+        await agentController.connect(using: endpoint)
     }
 
     private func enqueueOrSend(_ utterance: TranscribedUtterance) {
@@ -442,15 +446,34 @@ private struct SettingsSheet: View {
                     if runtimeController.isManagedMode {
                         TextField("Image", text: $runtimeController.managedContainerImage)
                         TextField("Container name", text: $runtimeController.managedContainerName)
-                        TextField("Host port", text: $runtimeController.managedHostPort)
-                        TextField("Container port", text: $runtimeController.managedContainerPort)
+                        TextField("Model name", text: $runtimeController.managedModelName)
+                        SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
+                        Toggle("Use Vertex AI", isOn: $runtimeController.managedUseVertexAI)
+
+                        if runtimeController.managedUseVertexAI {
+                            TextField("Google Cloud project", text: $runtimeController.managedGoogleCloudProject)
+                            TextField("Google Cloud location", text: $runtimeController.managedGoogleCloudLocation)
+                        }
+
+                        if !runtimeController.isManagedRuntimeConfigured {
+                            Text(runtimeController.runtimeStatusDetail)
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
 
                         HStack {
-                            Text("Computed Endpoint URL")
+                            Text("Runtime endpoint")
                             Spacer()
                             Text(runtimeController.computedEndpointURL)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.trailing)
+                        }
+
+                        HStack {
+                            Text("Container port")
+                            Spacer()
+                            Text("8000")
+                                .foregroundStyle(.secondary)
                         }
 
                         HStack {

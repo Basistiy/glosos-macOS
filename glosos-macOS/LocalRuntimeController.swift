@@ -17,7 +17,7 @@ enum RuntimeMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .managedAppleContainer:
-            return "Managed Apple Container"
+            return "Managed Container"
         case .manualEndpoint:
             return "Manual Endpoint"
         }
@@ -43,129 +43,52 @@ enum RuntimeState: Equatable {
 }
 
 struct ManagedContainerConfiguration: Equatable {
+    static let servicePort: UInt16 = 8000
+
     let image: String
     let containerName: String
-    let hostPort: UInt16
     let containerPort: UInt16
+    let modelName: String
+    let googleAPIKey: String?
+    let googleGenAIUseVertexAI: Bool
+    let googleCloudProject: String?
+    let googleCloudLocation: String?
 
-    var endpoint: AgentEndpoint {
-        AgentEndpoint(baseURL: URL(string: "http://127.0.0.1:\(hostPort)")!)
+    nonisolated var environmentVariables: [String] {
+        var variables = [
+            "MODEL_NAME=\(modelName)",
+            "PORT=\(containerPort)",
+        ]
+
+        if googleGenAIUseVertexAI {
+            variables.append("GOOGLE_GENAI_USE_VERTEXAI=true")
+            if let googleCloudProject {
+                variables.append("GOOGLE_CLOUD_PROJECT=\(googleCloudProject)")
+            }
+            if let googleCloudLocation {
+                variables.append("GOOGLE_CLOUD_LOCATION=\(googleCloudLocation)")
+            }
+        } else {
+            variables.append("GOOGLE_GENAI_USE_VERTEXAI=false")
+            if let googleAPIKey {
+                variables.append("GOOGLE_API_KEY=\(googleAPIKey)")
+            }
+        }
+
+        return variables
     }
-
-    var endpointURL: String {
-        endpoint.displayString
-    }
-
-    var publishArgument: String {
-        "127.0.0.1:\(hostPort):\(containerPort)"
-    }
-}
-
-struct CommandResult: Equatable {
-    let exitCode: Int32
-    let stdout: String
-    let stderr: String
-}
-
-protocol CommandRunning {
-    func run(executableURL: URL, arguments: [String]) async throws -> CommandResult
-}
-
-protocol AppleContainerSupportChecking {
-    func currentSupportStatus() -> AppleContainerSupportStatus
-}
-
-enum AppleContainerSupportStatus: Equatable {
-    case supported(executableURL: URL)
-    case unsupported(message: String)
 }
 
 protocol LocalRuntimeHealthChecking {
-    func waitUntilHealthy(baseURL: URL, timeoutSeconds: TimeInterval) async -> Bool
-}
-
-final class ProcessCommandRunner: CommandRunning {
-    func run(executableURL: URL, arguments: [String]) async throws -> CommandResult {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-
-            process.executableURL = executableURL
-            process.arguments = arguments
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            process.terminationHandler = { process in
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                let result = CommandResult(
-                    exitCode: process.terminationStatus,
-                    stdout: String(decoding: stdoutData, as: UTF8.self),
-                    stderr: String(decoding: stderrData, as: UTF8.self)
-                )
-                continuation.resume(returning: result)
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
-}
-
-struct AppleContainerSupportChecker: AppleContainerSupportChecking {
-    private let fileManager: FileManager
-    private let processInfo: ProcessInfo
-    private let candidatePaths: [String]
-
-    init(
-        fileManager: FileManager = .default,
-        processInfo: ProcessInfo = .processInfo,
-        candidatePaths: [String] = [
-            "/usr/local/bin/container",
-            "/opt/homebrew/bin/container"
-        ]
-    ) {
-        self.fileManager = fileManager
-        self.processInfo = processInfo
-        self.candidatePaths = candidatePaths
-    }
-
-    func currentSupportStatus() -> AppleContainerSupportStatus {
-#if arch(arm64)
-        let isAppleSilicon = true
-#else
-        let isAppleSilicon = false
-#endif
-
-        guard isAppleSilicon else {
-            return .unsupported(message: "Apple containers require an Apple silicon Mac.")
-        }
-
-        let version = processInfo.operatingSystemVersion
-        guard version.majorVersion >= 26 else {
-            return .unsupported(message: "Apple containers require macOS 26 or newer.")
-        }
-
-        for path in candidatePaths where fileManager.isExecutableFile(atPath: path) {
-            return .supported(executableURL: URL(fileURLWithPath: path))
-        }
-
-        return .unsupported(
-            message: "Install Apple's container CLI from github.com/apple/container/releases, then reopen the app."
-        )
-    }
+    func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool
 }
 
 final class HealthEndpointChecker: LocalRuntimeHealthChecking {
-    func waitUntilHealthy(baseURL: URL, timeoutSeconds: TimeInterval) async -> Bool {
+    func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
 
         while Date() < deadline {
-            if await isHealthy(baseURL: baseURL) {
+            if await isHealthy(endpoint: endpoint) {
                 return true
             }
 
@@ -175,8 +98,8 @@ final class HealthEndpointChecker: LocalRuntimeHealthChecking {
         return false
     }
 
-    private func isHealthy(baseURL: URL) async -> Bool {
-        var request = URLRequest(url: baseURL.appendingPathComponent("healthz"))
+    private func isHealthy(endpoint: ManagedRuntimeEndpoint) async -> Bool {
+        var request = URLRequest(url: endpoint.agentEndpoint.healthURL)
         request.timeoutInterval = 2
 
         do {
@@ -212,15 +135,33 @@ final class LocalRuntimeController: ObservableObject {
         }
     }
 
-    @Published var managedHostPort: String {
+    @Published var managedModelName: String {
         didSet {
-            userDefaults.set(managedHostPort, forKey: Self.managedHostPortKey)
+            userDefaults.set(managedModelName, forKey: Self.managedModelNameKey)
         }
     }
 
-    @Published var managedContainerPort: String {
+    @Published var managedGoogleAPIKey: String {
         didSet {
-            userDefaults.set(managedContainerPort, forKey: Self.managedContainerPortKey)
+            userDefaults.set(managedGoogleAPIKey, forKey: Self.managedGoogleAPIKeyKey)
+        }
+    }
+
+    @Published var managedUseVertexAI: Bool {
+        didSet {
+            userDefaults.set(managedUseVertexAI, forKey: Self.managedUseVertexAIKey)
+        }
+    }
+
+    @Published var managedGoogleCloudProject: String {
+        didSet {
+            userDefaults.set(managedGoogleCloudProject, forKey: Self.managedGoogleCloudProjectKey)
+        }
+    }
+
+    @Published var managedGoogleCloudLocation: String {
+        didSet {
+            userDefaults.set(managedGoogleCloudLocation, forKey: Self.managedGoogleCloudLocationKey)
         }
     }
 
@@ -228,17 +169,22 @@ final class LocalRuntimeController: ObservableObject {
     @Published private(set) var runtimeStatusDetail = "Stopped"
     @Published private(set) var lastRuntimeError: String?
     @Published private(set) var recentLogs = ""
+    @Published private(set) var currentManagedEndpoint: ManagedRuntimeEndpoint?
 
     private let userDefaults: UserDefaults
-    private let supportChecker: AppleContainerSupportChecking
-    private let commandRunner: CommandRunning
+    private let supportChecker: ContainerizationSupportChecking
+    private let assetManager: ContainerAssetManaging
+    private let runtimeManager: ContainerRuntimeManaging
     private let healthChecker: LocalRuntimeHealthChecking
 
     private static let runtimeModeKey = "runtimeMode"
     private static let managedContainerImageKey = "managedContainerImage"
     private static let managedContainerNameKey = "managedContainerName"
-    private static let managedHostPortKey = "managedHostPort"
-    private static let managedContainerPortKey = "managedContainerPort"
+    private static let managedModelNameKey = "managedModelName"
+    private static let managedGoogleAPIKeyKey = "managedGoogleAPIKey"
+    private static let managedUseVertexAIKey = "managedUseVertexAI"
+    private static let managedGoogleCloudProjectKey = "managedGoogleCloudProject"
+    private static let managedGoogleCloudLocationKey = "managedGoogleCloudLocation"
     private static let agentEndpointURLKey = "agentEndpointURL"
     private static let legacyAgentSocketURLKey = "agentSocketURL"
     private static let legacyManualRuntimeMode = "manualWebSocket"
@@ -247,13 +193,15 @@ final class LocalRuntimeController: ObservableObject {
 
     init(
         userDefaults: UserDefaults = .standard,
-        supportChecker: AppleContainerSupportChecking = AppleContainerSupportChecker(),
-        commandRunner: CommandRunning = ProcessCommandRunner(),
+        supportChecker: ContainerizationSupportChecking = ContainerizationSupportChecker(),
+        assetManager: ContainerAssetManaging = ApplicationSupportContainerAssetManager(),
+        runtimeManager: ContainerRuntimeManaging = ContainerizationRuntimeEngine(),
         healthChecker: LocalRuntimeHealthChecking = HealthEndpointChecker()
     ) {
         self.userDefaults = userDefaults
         self.supportChecker = supportChecker
-        self.commandRunner = commandRunner
+        self.assetManager = assetManager
+        self.runtimeManager = runtimeManager
         self.healthChecker = healthChecker
 
         if let savedMode = userDefaults.string(forKey: Self.runtimeModeKey) {
@@ -275,12 +223,27 @@ final class LocalRuntimeController: ObservableObject {
             ?? "ghcr.io/basistiy/glosos-google-user:latest"
         self.managedContainerName = userDefaults.string(forKey: Self.managedContainerNameKey)
             ?? "glosos-google-user-macos"
-        self.managedHostPort = userDefaults.string(forKey: Self.managedHostPortKey) ?? "18000"
-        self.managedContainerPort = userDefaults.string(forKey: Self.managedContainerPortKey) ?? "8000"
+        self.managedModelName = userDefaults.string(forKey: Self.managedModelNameKey)
+            ?? ProcessInfo.processInfo.environment["MODEL_NAME"]
+            ?? "gemini-2.5-flash"
+        self.managedGoogleAPIKey = userDefaults.string(forKey: Self.managedGoogleAPIKeyKey)
+            ?? ProcessInfo.processInfo.environment["GOOGLE_API_KEY"]
+            ?? ""
+        self.managedUseVertexAI = if userDefaults.object(forKey: Self.managedUseVertexAIKey) != nil {
+            userDefaults.bool(forKey: Self.managedUseVertexAIKey)
+        } else {
+            Self.environmentBoolean(named: "GOOGLE_GENAI_USE_VERTEXAI")
+        }
+        self.managedGoogleCloudProject = userDefaults.string(forKey: Self.managedGoogleCloudProjectKey)
+            ?? ProcessInfo.processInfo.environment["GOOGLE_CLOUD_PROJECT"]
+            ?? ""
+        self.managedGoogleCloudLocation = userDefaults.string(forKey: Self.managedGoogleCloudLocationKey)
+            ?? ProcessInfo.processInfo.environment["GOOGLE_CLOUD_LOCATION"]
+            ?? ""
     }
 
     var computedEndpointURL: String {
-        resolvedConfiguration?.endpointURL ?? AgentEndpoint.defaultLocalBaseURLString
+        currentManagedEndpoint?.displayString ?? "Not ready"
     }
 
     var isManagedMode: Bool {
@@ -291,126 +254,113 @@ final class LocalRuntimeController: ObservableObject {
         runtimeState.isBusy
     }
 
+    var isManagedRuntimeConfigured: Bool {
+        resolvedConfiguration != nil
+    }
+
     func refreshStatus() async {
         lastRuntimeError = nil
+        recentLogs = ""
 
-        guard case .supported(let executableURL) = supportChecker.currentSupportStatus() else {
+        guard case .supported = supportChecker.currentSupportStatus() else {
             applyUnsupportedState()
             return
         }
 
         guard let configuration = resolvedConfiguration else {
-            runtimeState = .failed
-            runtimeStatusDetail = "Managed runtime settings are invalid."
-            lastRuntimeError = "Enter a valid image, container name, and port mapping for the managed runtime."
+            currentManagedEndpoint = nil
+            runtimeState = .stopped
+            runtimeStatusDetail = managedRuntimeSetupMessage
             return
         }
 
-        do {
-            let containers = try await listManagedContainers(executableURL: executableURL, configuration: configuration)
-            if let container = containers.first {
-                if container.status == "running" {
-                    runtimeState = .running
-                    let isHealthy = await healthChecker.waitUntilHealthy(
-                        baseURL: configuration.endpoint.baseURL,
-                        timeoutSeconds: 2
-                    )
-                    if isHealthy {
-                        runtimeState = .running
-                        runtimeStatusDetail = "Running at \(configuration.endpointURL)"
-                    } else {
-                        runtimeState = .failed
-                        runtimeStatusDetail = "Container is running but the endpoint is unavailable."
-                    }
-                } else {
-                    runtimeState = .stopped
-                    runtimeStatusDetail = "Container exists but is not running."
-                }
-            } else {
-                runtimeState = .stopped
-                runtimeStatusDetail = "Managed container is not running."
-            }
-        } catch {
+        guard let endpoint = await runtimeManager.currentEndpoint(containerName: configuration.containerName) else {
+            currentManagedEndpoint = nil
             runtimeState = .stopped
-            runtimeStatusDetail = "Apple container service is not running."
+            runtimeStatusDetail = "Managed container is not running."
+            return
+        }
+
+        currentManagedEndpoint = endpoint
+        let isHealthy = await healthChecker.waitUntilHealthy(endpoint: endpoint, timeoutSeconds: 2)
+        if isHealthy {
+            runtimeState = .running
+            runtimeStatusDetail = "Running at \(endpoint.displayString)"
+        } else {
+            runtimeState = .failed
+            runtimeStatusDetail = "Container endpoint is unavailable."
+            recentLogs = await assetManager.recentLogs(
+                containerName: configuration.containerName,
+                assets: try? await assetManager.existingAssets()
+            )
         }
     }
 
     func startRuntime() async -> Bool {
         lastRuntimeError = nil
         recentLogs = ""
+        currentManagedEndpoint = nil
 
-        guard case .supported(let executableURL) = supportChecker.currentSupportStatus() else {
+        guard case .supported = supportChecker.currentSupportStatus() else {
             applyUnsupportedState()
             return false
         }
 
         guard let configuration = resolvedConfiguration else {
-            applyFailure("Enter a valid image, container name, and port mapping for the managed runtime.")
+            applyFailure(invalidConfigurationMessage)
             return false
         }
 
         runtimeState = .starting
-        runtimeStatusDetail = "Starting Apple container runtime..."
+        runtimeStatusDetail = "Preparing managed runtime..."
 
         do {
-            try await runChecked(
-                executableURL: executableURL,
-                arguments: ["system", "start"],
-                failurePrefix: "Could not start Apple's container service."
-            )
-
-            let existingContainers = try await listManagedContainers(
-                executableURL: executableURL,
-                configuration: configuration
-            )
-            if let existingContainer = existingContainers.first {
-                if existingContainer.status == "running" {
-                    _ = try? await commandRunner.run(
-                        executableURL: executableURL,
-                        arguments: ["stop", configuration.containerName]
-                    )
+            let assets = try await assetManager.prepareAssets { [weak self] status in
+                await MainActor.run {
+                    self?.runtimeStatusDetail = status
                 }
-
-                _ = try? await commandRunner.run(
-                    executableURL: executableURL,
-                    arguments: ["rm", configuration.containerName]
-                )
             }
 
-            _ = try? await commandRunner.run(
-                executableURL: executableURL,
-                arguments: ["image", "delete", configuration.image]
+            let endpoint = try await runtimeManager.start(
+                configuration: configuration,
+                assets: assets,
+                updateStatus: { [weak self] status in
+                    await MainActor.run {
+                        self?.runtimeStatusDetail = status
+                    }
+                }
             )
 
-            try await runChecked(
-                executableURL: executableURL,
-                arguments: [
-                    "run",
-                    "--name", configuration.containerName,
-                    "--detach",
-                    "--rm",
-                    "-p", configuration.publishArgument,
-                    configuration.image
-                ],
-                failurePrefix: "Could not start the managed container."
-            )
-
+            runtimeStatusDetail = "Waiting for runtime endpoint..."
             let isHealthy = await healthChecker.waitUntilHealthy(
-                baseURL: configuration.endpoint.baseURL,
+                endpoint: endpoint,
                 timeoutSeconds: 20
             )
 
             guard isHealthy else {
-                recentLogs = await fetchLogs(executableURL: executableURL, containerName: configuration.containerName)
-                throw LocalRuntimeFailure("Container started, but the HTTP endpoint never became ready.")
+                await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
+                recentLogs = await assetManager.recentLogs(
+                    containerName: configuration.containerName,
+                    assets: assets
+                )
+                throw RuntimePreparationError.failed(
+                    "Container started, but the runtime endpoint never became ready."
+                )
             }
 
+            currentManagedEndpoint = endpoint
             runtimeState = .running
-            runtimeStatusDetail = "Running at \(configuration.endpointURL)"
+            runtimeStatusDetail = "Running at \(endpoint.displayString)"
             return true
-        } catch let error as LocalRuntimeFailure {
-            applyFailure(error.message)
+        } catch let error as RuntimePreparationError {
+            switch error {
+            case .unsupported(let message):
+                runtimeState = .unsupported
+                runtimeStatusDetail = message
+                lastRuntimeError = message
+            case .failed(let message):
+                applyFailure(message)
+            }
             return false
         } catch {
             applyFailure(error.localizedDescription)
@@ -421,7 +371,7 @@ final class LocalRuntimeController: ObservableObject {
     func stopRuntime() async {
         lastRuntimeError = nil
 
-        guard case .supported(let executableURL) = supportChecker.currentSupportStatus() else {
+        guard case .supported = supportChecker.currentSupportStatus() else {
             applyUnsupportedState()
             return
         }
@@ -435,17 +385,12 @@ final class LocalRuntimeController: ObservableObject {
         runtimeState = .stopping
         runtimeStatusDetail = "Stopping managed container..."
 
-        _ = try? await commandRunner.run(
-            executableURL: executableURL,
-            arguments: ["stop", containerName]
-        )
-        _ = try? await commandRunner.run(
-            executableURL: executableURL,
-            arguments: ["rm", containerName]
-        )
+        let assets = try? await assetManager.existingAssets()
+        await runtimeManager.stop(containerName: containerName, assets: assets)
 
         runtimeState = .stopped
         runtimeStatusDetail = "Managed container stopped."
+        currentManagedEndpoint = nil
         recentLogs = ""
     }
 
@@ -457,22 +402,51 @@ final class LocalRuntimeController: ObservableObject {
     private var resolvedConfiguration: ManagedContainerConfiguration? {
         let image = managedContainerImage.trimmingCharacters(in: .whitespacesAndNewlines)
         let containerName = managedContainerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hostPortValue = UInt16(managedHostPort.trimmingCharacters(in: .whitespacesAndNewlines))
-        let containerPortValue = UInt16(managedContainerPort.trimmingCharacters(in: .whitespacesAndNewlines))
+        let modelName = managedModelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let googleAPIKey = managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let googleCloudProject = managedGoogleCloudProject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let googleCloudLocation = managedGoogleCloudLocation.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !image.isEmpty,
               !containerName.isEmpty,
-              let hostPort = hostPortValue,
-              let containerPort = containerPortValue else {
+              !modelName.isEmpty else {
+            return nil
+        }
+
+        if managedUseVertexAI {
+            guard !googleCloudProject.isEmpty, !googleCloudLocation.isEmpty else {
+                return nil
+            }
+        } else if googleAPIKey.isEmpty {
             return nil
         }
 
         return ManagedContainerConfiguration(
             image: image,
             containerName: containerName,
-            hostPort: hostPort,
-            containerPort: containerPort
+            containerPort: ManagedContainerConfiguration.servicePort,
+            modelName: modelName,
+            googleAPIKey: googleAPIKey.isEmpty ? nil : googleAPIKey,
+            googleGenAIUseVertexAI: managedUseVertexAI,
+            googleCloudProject: googleCloudProject.isEmpty ? nil : googleCloudProject,
+            googleCloudLocation: googleCloudLocation.isEmpty ? nil : googleCloudLocation
         )
+    }
+
+    private var invalidConfigurationMessage: String {
+        if managedUseVertexAI {
+            return "Enter a valid image, container name, model name, Google Cloud project, and Google Cloud location for the managed runtime."
+        }
+
+        return "Enter a valid image, container name, model name, and Google API key for the managed runtime."
+    }
+
+    private var managedRuntimeSetupMessage: String {
+        if managedUseVertexAI {
+            return "Managed runtime is waiting for Google Cloud project and location."
+        }
+
+        return "Managed runtime is waiting for a Google API key."
     }
 
     private static func savedManualEndpointString(in userDefaults: UserDefaults) -> String? {
@@ -495,6 +469,7 @@ final class LocalRuntimeController: ObservableObject {
             runtimeState = .unsupported
             runtimeStatusDetail = message
             lastRuntimeError = message
+            currentManagedEndpoint = nil
         }
     }
 
@@ -502,87 +477,14 @@ final class LocalRuntimeController: ObservableObject {
         runtimeState = .failed
         runtimeStatusDetail = "Managed runtime failed."
         lastRuntimeError = message
+        currentManagedEndpoint = nil
     }
 
-    private func listManagedContainers(
-        executableURL: URL,
-        configuration: ManagedContainerConfiguration
-    ) async throws -> [ManagedContainerListEntry] {
-        let result = try await commandRunner.run(
-            executableURL: executableURL,
-            arguments: ["ls", "--format", "json", "--all"]
-        )
-
-        guard result.exitCode == 0 else {
-            throw LocalRuntimeFailure(preferredCommandMessage(from: result, fallback: "Could not list containers."))
+    private static func environmentBoolean(named name: String) -> Bool {
+        guard let value = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
         }
 
-        let data = Data(result.stdout.utf8)
-        let containers = try JSONDecoder().decode([ManagedContainerListEntry].self, from: data)
-        return containers.filter { $0.configuration.id == configuration.containerName }
-    }
-
-    private func fetchLogs(executableURL: URL, containerName: String) async -> String {
-        guard !containerName.isEmpty else {
-            return ""
-        }
-
-        guard let result = try? await commandRunner.run(
-            executableURL: executableURL,
-            arguments: ["logs", containerName]
-        ) else {
-            return ""
-        }
-
-        let rawOutput = [result.stdout, result.stderr]
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rawOutput.isEmpty else {
-            return ""
-        }
-
-        return String(rawOutput.suffix(4_000))
-    }
-
-    private func runChecked(
-        executableURL: URL,
-        arguments: [String],
-        failurePrefix: String
-    ) async throws {
-        let result = try await commandRunner.run(executableURL: executableURL, arguments: arguments)
-        guard result.exitCode == 0 else {
-            throw LocalRuntimeFailure("\(failurePrefix) \(preferredCommandMessage(from: result, fallback: "The command exited with status \(result.exitCode)."))")
-        }
-    }
-
-    private func preferredCommandMessage(from result: CommandResult, fallback: String) -> String {
-        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !stderr.isEmpty {
-            return stderr
-        }
-
-        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !stdout.isEmpty {
-            return stdout
-        }
-
-        return fallback
-    }
-}
-
-private struct ManagedContainerListEntry: Decodable, Equatable {
-    struct Configuration: Decodable, Equatable {
-        let id: String
-    }
-
-    let status: String
-    let configuration: Configuration
-}
-
-private struct LocalRuntimeFailure: Error {
-    let message: String
-
-    init(_ message: String) {
-        self.message = message
+        return ["1", "true", "yes", "on"].contains(value)
     }
 }

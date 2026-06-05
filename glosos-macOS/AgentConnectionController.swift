@@ -8,23 +8,24 @@
 import Combine
 import Foundation
 
-protocol AgentServiceClient {
-    func checkHealth(at endpoint: AgentEndpoint) async throws
-    func streamMessage(
+protocol AgentTransport {
+    func connect(to endpoint: AgentEndpoint) async throws
+    func disconnect()
+    func send(
         _ payload: OutboundMessage,
         to endpoint: AgentEndpoint,
         onEvent: @escaping @Sendable (AgentEvent) async -> Void
     ) async throws
 }
 
-struct URLSessionAgentServiceClient: AgentServiceClient {
+struct HTTPStreamingAgentTransport: AgentTransport {
     private let session: URLSession
 
     init(session: URLSession = .shared) {
         self.session = session
     }
 
-    func checkHealth(at endpoint: AgentEndpoint) async throws {
+    func connect(to endpoint: AgentEndpoint) async throws {
         var request = URLRequest(url: endpoint.healthURL)
         request.timeoutInterval = 5
 
@@ -32,7 +33,9 @@ struct URLSessionAgentServiceClient: AgentServiceClient {
         try validate(response: response, fallbackMessage: "Health check failed.")
     }
 
-    func streamMessage(
+    func disconnect() {}
+
+    func send(
         _ payload: OutboundMessage,
         to endpoint: AgentEndpoint,
         onEvent: @escaping @Sendable (AgentEvent) async -> Void
@@ -89,7 +92,7 @@ final class AgentConnectionController: ObservableObject {
     @Published private(set) var latestCompletedAssistantMessage: ChatMessage?
 
     private let userDefaults: UserDefaults
-    private let serviceClient: AgentServiceClient
+    private let transport: AgentTransport
     private var activeRequestTask: Task<Void, Never>?
     private var userInitiatedDisconnect = false
     private var activeAssistantMessageID: UUID?
@@ -100,10 +103,10 @@ final class AgentConnectionController: ObservableObject {
 
     init(
         userDefaults: UserDefaults = .standard,
-        serviceClient: AgentServiceClient = URLSessionAgentServiceClient()
+        transport: AgentTransport = HTTPStreamingAgentTransport()
     ) {
         self.userDefaults = userDefaults
-        self.serviceClient = serviceClient
+        self.transport = transport
         self.endpointURL = Self.loadSavedEndpointURL(from: userDefaults)
         self.sessionID = userDefaults.string(forKey: Self.sessionIDKey) ?? "macos-local"
     }
@@ -137,7 +140,7 @@ final class AgentConnectionController: ObservableObject {
         connectionStatus = "Checking endpoint..."
 
         do {
-            try await serviceClient.checkHealth(at: endpoint)
+            try await transport.connect(to: endpoint)
             isConnected = true
             connectionStatus = "Connected"
         } catch {
@@ -147,6 +150,10 @@ final class AgentConnectionController: ObservableObject {
                 state: .error
             )
         }
+    }
+
+    func connect(using managedEndpoint: ManagedRuntimeEndpoint) async {
+        await connect(using: managedEndpoint.displayString)
     }
 
     func disconnect() {
@@ -201,7 +208,7 @@ final class AgentConnectionController: ObservableObject {
         let payload = OutboundMessage(session_id: trimmedSessionID, message: trimmedMessage)
         activeRequestTask = Task { [weak self] in
             do {
-                try await self?.serviceClient.streamMessage(
+                try await self?.transport.send(
                     payload,
                     to: endpoint,
                     onEvent: { [weak self] event in
@@ -357,6 +364,7 @@ final class AgentConnectionController: ObservableObject {
     private func disconnectInternal(reason: String?, shouldReportToChat: Bool) {
         activeRequestTask?.cancel()
         activeRequestTask = nil
+        transport.disconnect()
         isConnected = false
         isAwaitingAssistantResponse = false
 

@@ -7,6 +7,57 @@
 
 import Foundation
 
+enum AgentTransportKind: String, Equatable {
+    case httpStream = "http-stream"
+}
+
+struct ManagedRuntimeEndpoint: Equatable {
+    let transport: AgentTransportKind
+    let scheme: String
+    let host: String
+    let port: UInt16
+    let basePath: String
+
+    nonisolated init(
+        transport: AgentTransportKind = .httpStream,
+        scheme: String = "http",
+        host: String,
+        port: UInt16,
+        basePath: String = ""
+    ) {
+        self.transport = transport
+        self.scheme = scheme.lowercased()
+        self.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.port = port
+
+        let trimmedPath = basePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedPath.isEmpty || trimmedPath == "/" {
+            self.basePath = ""
+        } else if trimmedPath.hasPrefix("/") {
+            self.basePath = trimmedPath
+        } else {
+            self.basePath = "/\(trimmedPath)"
+        }
+    }
+
+    nonisolated var displayString: String {
+        baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
+    nonisolated var baseURL: URL {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.port = Int(port)
+        components.percentEncodedPath = basePath
+        return components.url!
+    }
+
+    nonisolated var agentEndpoint: AgentEndpoint {
+        AgentEndpoint(baseURL: baseURL)
+    }
+}
+
 struct AgentEndpoint: Equatable {
     static let defaultLocalBaseURLString = "http://127.0.0.1:18000"
 

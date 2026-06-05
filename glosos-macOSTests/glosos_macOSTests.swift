@@ -13,6 +13,26 @@ struct glosos_macOSTests {
 
     @Test
     @MainActor
+    func agentControllerConnectsThroughTransportAbstraction() async throws {
+        let transport = RecordingAgentTransport()
+        let suiteName = "AgentConnectionControllerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+
+        let controller = AgentConnectionController(
+            userDefaults: defaults,
+            transport: transport
+        )
+
+        await controller.connect(using: "http://127.0.0.1:18000")
+
+        #expect(controller.isConnected)
+        #expect(controller.connectionStatus == "Connected")
+        #expect(transport.connectedEndpoints == [AgentEndpoint(baseURL: URL(string: "http://127.0.0.1:18000")!)])
+    }
+
+    @Test
+    @MainActor
     func assistantChunksAreAggregatedIntoSingleBubble() async throws {
         let controller = AgentConnectionController()
         let assistantMessageID = controller.beginAssistantTurn(userText: "Hello there")
@@ -84,4 +104,24 @@ struct glosos_macOSTests {
         #expect(coordinator.suppressedAssistantMessageID == interruptedID)
     }
 
+}
+
+final class RecordingAgentTransport: AgentTransport {
+    private(set) var connectedEndpoints: [AgentEndpoint] = []
+
+    func connect(to endpoint: AgentEndpoint) async throws {
+        connectedEndpoints.append(endpoint)
+    }
+
+    func disconnect() {}
+
+    func send(
+        _ payload: OutboundMessage,
+        to endpoint: AgentEndpoint,
+        onEvent: @escaping @Sendable (AgentEvent) async -> Void
+    ) async throws {
+        let _ = payload
+        let _ = endpoint
+        let _ = onEvent
+    }
 }
