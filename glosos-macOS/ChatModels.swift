@@ -66,6 +66,31 @@ struct PendingUtteranceCoordinator: Equatable {
     }
 }
 
+struct AssistantPlaybackCoordinator: Equatable {
+    private(set) var suppressedAssistantMessageID: UUID?
+
+    mutating func suppress(messageID: UUID?) {
+        suppressedAssistantMessageID = messageID
+    }
+
+    mutating func consumeCompletion(for message: ChatMessage) -> Bool {
+        guard message.role == .assistant else {
+            return false
+        }
+
+        guard let suppressedAssistantMessageID else {
+            return true
+        }
+
+        if message.id == suppressedAssistantMessageID {
+            self.suppressedAssistantMessageID = nil
+            return false
+        }
+
+        return true
+    }
+}
+
 struct AgentEvent: Decodable, Equatable {
     let type: String
     let session_id: String?

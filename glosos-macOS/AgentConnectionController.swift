@@ -26,6 +26,10 @@ final class AgentConnectionController: NSObject, ObservableObject {
     private var userInitiatedDisconnect = false
     private var activeAssistantMessageID: UUID?
 
+    var activeAssistantTurnID: UUID? {
+        activeAssistantMessageID
+    }
+
     var statusDetail: String {
         if isAwaitingAssistantResponse {
             return "Agent is replying"

@@ -14,7 +14,7 @@ struct ContentView: View {
     @State private var isShowingSettings = false
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
-    @State private var suppressNextAssistantPlayback = false
+    @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,10 +80,10 @@ struct ContentView: View {
                 return
             }
 
-            if autoSpeakAgentReplies, !suppressNextAssistantPlayback {
+            let shouldSpeakAssistantReply = assistantPlaybackCoordinator.consumeCompletion(for: newValue)
+            if autoSpeakAgentReplies, shouldSpeakAssistantReply {
                 speechController.play(newValue.text)
             }
-            suppressNextAssistantPlayback = false
             sendPendingUtteranceIfPossible()
         }
         .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
@@ -91,7 +91,7 @@ struct ContentView: View {
         }
         .onChange(of: speechController.playbackInterruptionToken) { _, newValue in
             if newValue != nil {
-                suppressNextAssistantPlayback = true
+                assistantPlaybackCoordinator.suppress(messageID: agentController.activeAssistantTurnID)
             }
         }
         .onDisappear {

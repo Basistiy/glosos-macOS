@@ -5,6 +5,7 @@
 //  Created by EV on 6/3/26.
 //
 
+import Foundation
 import Testing
 @testable import glosos_macOS
 
@@ -55,6 +56,32 @@ struct glosos_macOSTests {
 
         #expect(coordinator.pendingUtterance == newer)
         #expect(coordinator.dequeueIfReady(whileAwaitingAssistantResponse: false) == newer)
+    }
+
+    @Test
+    func interruptedAssistantReplyIsSuppressedByMessageID() async throws {
+        let interruptedID = UUID()
+        let interruptedMessage = ChatMessage(id: interruptedID, role: .assistant, text: "Old reply")
+        var coordinator = AssistantPlaybackCoordinator()
+
+        coordinator.suppress(messageID: interruptedID)
+        let shouldSpeak = coordinator.consumeCompletion(for: interruptedMessage)
+
+        #expect(shouldSpeak == false)
+        #expect(coordinator.suppressedAssistantMessageID == nil)
+    }
+
+    @Test
+    func newAssistantReplyStillSpeaksAfterInterruptingDifferentTurn() async throws {
+        let interruptedID = UUID()
+        let nextReply = ChatMessage(role: .assistant, text: "New reply")
+        var coordinator = AssistantPlaybackCoordinator()
+
+        coordinator.suppress(messageID: interruptedID)
+        let shouldSpeak = coordinator.consumeCompletion(for: nextReply)
+
+        #expect(shouldSpeak == true)
+        #expect(coordinator.suppressedAssistantMessageID == interruptedID)
     }
 
 }
