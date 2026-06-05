@@ -186,11 +186,11 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Label(
-                    speechController.isCapturingSpeech ? "Listening now" : "Microphone ready",
-                    systemImage: speechController.isCapturingSpeech ? "waveform.badge.mic" : "mic.fill"
+                    microphoneStatusLabel,
+                    systemImage: microphoneStatusIcon
                 )
                 .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .foregroundStyle(Color(red: 0.16, green: 0.20, blue: 0.17))
+                .foregroundStyle(microphoneStatusColor)
 
                 Spacer()
 
@@ -199,6 +199,26 @@ struct ContentView: View {
                         .font(.system(.caption, design: .rounded).weight(.semibold))
                         .foregroundStyle(Color.black.opacity(0.48))
                 }
+
+                Button {
+                    speechController.toggleMicrophoneMute()
+                } label: {
+                    Label(
+                        speechController.isMicrophoneMuted ? "Unmute" : "Mute",
+                        systemImage: speechController.isMicrophoneMuted ? "mic.fill" : "mic.slash.fill"
+                    )
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .foregroundStyle(speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        speechController.isMicrophoneMuted
+                            ? Color(red: 0.73, green: 0.34, blue: 0.21)
+                            : Color(red: 0.95, green: 0.89, blue: 0.84)
+                    )
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
             }
 
             Text(liveTranscriptText)
@@ -219,6 +239,12 @@ struct ContentView: View {
     }
 
     private var liveTranscriptText: String {
+        if speechController.isMicrophoneMuted {
+            return agentController.isAwaitingAssistantResponse
+                ? "Microphone is muted. Assistant playback will continue without spoken interruptions until you unmute."
+                : "Microphone is muted. Unmute when you want to speak to the agent again."
+        }
+
         let transcript = speechController.displayedLiveTranscript
         if !transcript.isEmpty {
             return transcript
@@ -242,6 +268,30 @@ struct ContentView: View {
                 endPoint: .bottomTrailing
             )
         }
+    }
+
+    private var microphoneStatusLabel: String {
+        if speechController.isMicrophoneMuted {
+            return "Microphone muted"
+        }
+
+        return speechController.isCapturingSpeech ? "Listening now" : "Microphone ready"
+    }
+
+    private var microphoneStatusIcon: String {
+        if speechController.isMicrophoneMuted {
+            return "mic.slash.fill"
+        }
+
+        return speechController.isCapturingSpeech ? "waveform.badge.mic" : "mic.fill"
+    }
+
+    private var microphoneStatusColor: Color {
+        if speechController.isMicrophoneMuted {
+            return Color(red: 0.71, green: 0.32, blue: 0.20)
+        }
+
+        return Color(red: 0.16, green: 0.20, blue: 0.17)
     }
 
     private func initializeIfNeeded() async {

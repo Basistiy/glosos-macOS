@@ -12,6 +12,7 @@ import Speech
 @MainActor
 final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
+    @Published private(set) var isMicrophoneMuted = false
     @Published private(set) var statusMessage = "Listening to the microphone and transcribing live."
     @Published private(set) var liveTranscript = "Waiting for speech..."
     @Published private(set) var finalizedUtterance: TranscribedUtterance?
@@ -65,11 +66,15 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     var displayedLiveTranscript: String {
         switch liveTranscript {
-        case "Waiting for speech...", "Listening...", "Microphone permission is required.":
+        case "Waiting for speech...", "Listening...", "Microphone permission is required.", "Microphone is muted.":
             return ""
         default:
             return liveTranscript
         }
+    }
+
+    func toggleMicrophoneMute() {
+        isMicrophoneMuted ? unmuteMicrophone() : muteMicrophone()
     }
 
     func preparePermissions() async {
@@ -91,7 +96,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         canListenForTranscription = speechStatus == .authorized && microphoneGranted && recognizerAvailable
 
         if canListenForTranscription {
-            statusMessage = "Listening to the microphone and transcribing live."
+            refreshStatusMessage()
         } else {
             statusMessage = "Microphone and Speech Recognition access are needed for live transcription."
             liveTranscript = "Microphone permission is required."
@@ -116,7 +121,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         shouldKeepListening = true
-        guard !isListeningContinuously else {
+        guard !isMicrophoneMuted, !isListeningContinuously else {
             return
         }
 
@@ -141,7 +146,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         isPreparingPlayback = true
         statusMessage = "Preparing synthesized playback..."
 
-        if canListenForTranscription, shouldKeepListening, !isListeningContinuously {
+        if shouldActivelyListen, !isListeningContinuously {
             do {
                 try startRecognitionSession()
             } catch {
@@ -162,7 +167,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         isPreparingPlayback = false
         isPlaybackAudible = true
         isSpeaking = true
-        statusMessage = canListenForTranscription
+        statusMessage = shouldActivelyListen
             ? "Playback is active. Any spoken word will interrupt it."
             : "Playing synthesized audio."
         log("Starting speech synthesis.")
@@ -235,7 +240,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         finalizePendingVADSpeechSegment(force: true)
         stopListening(reason: "recognition completed", shouldLog: error == nil && isFinal)
 
-        guard shouldKeepListening else {
+        guard shouldActivelyListen else {
             return
         }
 
@@ -295,11 +300,15 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             }
         }
 
-        statusMessage = shouldKeepListening
-            ? "Listening to the microphone and transcribing live."
-            : (wasInterrupted ? "Playback stopped." : "Playback finished.")
+        if shouldActivelyListen {
+            statusMessage = "Listening to the microphone and transcribing live."
+        } else if isMicrophoneMuted {
+            statusMessage = "Microphone is muted."
+        } else {
+            statusMessage = wasInterrupted ? "Playback stopped." : "Playback finished."
+        }
 
-        if shouldKeepListening, !isListeningContinuously {
+        if shouldActivelyListen, !isListeningContinuously {
             restartListeningAfterDelay()
         }
     }
@@ -362,7 +371,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             }
             await MainActor.run {
                 self.listenerRestartTask = nil
-                guard self.shouldKeepListening, !self.isListeningContinuously, !self.isPreparingPlayback, !self.isPlaybackAudible else {
+                guard self.shouldActivelyListen, !self.isListeningContinuously, !self.isPreparingPlayback, !self.isPlaybackAudible else {
                     return
                 }
 
@@ -373,6 +382,68 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     self.statusMessage = "Transcription stopped and could not restart."
                 }
             }
+        }
+    }
+
+    private var shouldActivelyListen: Bool {
+        canListenForTranscription && shouldKeepListening && !isMicrophoneMuted
+    }
+
+    private func muteMicrophone() {
+        guard !isMicrophoneMuted else {
+            return
+        }
+
+        isMicrophoneMuted = true
+        listenerRestartTask?.cancel()
+        listenerRestartTask = nil
+        vadSpeechEndTask?.cancel()
+        vadSpeechEndTask = nil
+        stopListening(reason: "microphone muted", shouldLog: true)
+        voiceProcessingIO.stop()
+        liveTranscript = "Microphone is muted."
+        statusMessage = "Microphone is muted."
+    }
+
+    private func unmuteMicrophone() {
+        guard isMicrophoneMuted else {
+            return
+        }
+
+        isMicrophoneMuted = false
+
+        guard canListenForTranscription else {
+            statusMessage = "Microphone and Speech Recognition access are needed for live transcription."
+            liveTranscript = "Microphone permission is required."
+            return
+        }
+
+        liveTranscript = "Waiting for speech..."
+        refreshStatusMessage()
+
+        guard shouldKeepListening, !isListeningContinuously else {
+            return
+        }
+
+        do {
+            try startRecognitionSession()
+            if isPlaybackAudible || isPreparingPlayback {
+                try voiceProcessingIO.setVoiceProcessingEnabled(true)
+                statusMessage = "Playback is active. Any spoken word will interrupt it."
+            }
+        } catch {
+            log("Failed to unmute microphone: \(error.localizedDescription)")
+            statusMessage = "Live transcription is unavailable right now."
+        }
+    }
+
+    private func refreshStatusMessage() {
+        if isMicrophoneMuted {
+            statusMessage = "Microphone is muted."
+        } else if isPlaybackAudible || isPreparingPlayback {
+            statusMessage = "Playback is active. Any spoken word will interrupt it."
+        } else {
+            statusMessage = "Listening to the microphone and transcribing live."
         }
     }
 
