@@ -8,13 +8,14 @@
 import AVFoundation
 import Combine
 import Speech
-import SwiftUI
 
 @MainActor
 final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var statusMessage = "Listening to the microphone and transcribing live."
     @Published private(set) var liveTranscript = "Waiting for speech..."
+    @Published private(set) var finalizedUtterance: TranscribedUtterance?
+    @Published private(set) var playbackInterruptionToken: UUID?
 
     private let playbackSynthesizer = AVSpeechSynthesizer()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -32,6 +33,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private var lastLoggedTranscript = ""
     private var shouldKeepListening = false
     private var listenerRestartTask: Task<Void, Never>?
+    private var didEmitFinalUtteranceForCurrentSession = false
 
     override init() {
         voiceProcessingIO = VoiceProcessingIO(logHandler: { message in
@@ -39,6 +41,19 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         })
         super.init()
         playbackSynthesizer.delegate = self
+    }
+
+    var isCapturingSpeech: Bool {
+        !displayedLiveTranscript.isEmpty
+    }
+
+    var displayedLiveTranscript: String {
+        switch liveTranscript {
+        case "Waiting for speech...", "Listening...", "Microphone permission is required.":
+            return ""
+        default:
+            return liveTranscript
+        }
     }
 
     func preparePermissions() async {
@@ -136,6 +151,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             throw VoiceStopError.recognizerUnavailable
         }
 
+        didEmitFinalUtteranceForCurrentSession = false
+
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = true
         recognitionRequest.addsPunctuation = false
@@ -156,9 +173,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self else { return }
 
+            let isFinal = result?.isFinal == true
             if let transcript = result?.bestTranscription.formattedString, !transcript.isEmpty {
                 Task { @MainActor in
-                    self.handleTranscript(transcript)
+                    self.handleTranscript(transcript, isFinal: isFinal)
                 }
             }
 
@@ -172,9 +190,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 self.log("Recognition result received. isFinal=\(result.isFinal)")
             }
 
-            if error != nil || result?.isFinal == true {
+            if error != nil || isFinal {
                 Task { @MainActor in
-                    self.handleRecognitionSessionEnded(error: error, isFinal: result?.isFinal == true)
+                    self.handleRecognitionSessionEnded(error: error, isFinal: isFinal)
                 }
             }
         }
@@ -195,8 +213,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         restartListeningAfterDelay()
     }
 
-    private func handleTranscript(_ transcript: String) {
-        if transcript == lastLoggedTranscript {
+    private func handleTranscript(_ transcript: String, isFinal: Bool) {
+        if transcript == lastLoggedTranscript, !isFinal {
             return
         }
 
@@ -204,17 +222,26 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         log("Transcript: \(transcript)")
         liveTranscript = transcript
 
-        guard isPlaybackAudible else {
+        guard hasRecognizedContent(in: transcript) else {
+            if isFinal {
+                liveTranscript = "Waiting for speech..."
+            }
             return
         }
 
-        let hasRecognizedContent = transcript.contains { !$0.isWhitespace && !$0.isPunctuation }
-        guard hasRecognizedContent else {
+        if isPlaybackAudible {
+            playbackInterruptionToken = UUID()
+            log("Detected spoken interruption in transcript.")
+            stopPlayback()
+        }
+
+        guard isFinal, !didEmitFinalUtteranceForCurrentSession else {
             return
         }
 
-        log("Detected spoken interruption in transcript.")
-        stopPlayback()
+        didEmitFinalUtteranceForCurrentSession = true
+        finalizedUtterance = TranscribedUtterance(text: transcript.trimmingCharacters(in: .whitespacesAndNewlines))
+        liveTranscript = "Waiting for speech..."
     }
 
     private func stopPlayback() {
@@ -223,8 +250,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         log("Stopping playback.")
-        // Recycling the recognizer after a barge-in has been more reliable than
-        // keeping the same partial-results stream alive across interruptions.
         if shouldKeepListening, isListeningContinuously {
             stopListening(reason: "refreshing recognition after interruption", shouldLog: false)
         }
@@ -244,7 +269,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         statusMessage = shouldKeepListening
             ? "Listening to the microphone and transcribing live."
-            : (wasInterrupted ? "Playback stopped. Press Play to start again." : "Playback finished. Press Play to listen again.")
+            : (wasInterrupted ? "Playback stopped." : "Playback finished.")
 
         if shouldKeepListening, !isListeningContinuously {
             restartListeningAfterDelay()
@@ -258,6 +283,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         isShuttingDownListener = true
+
         if shouldLog {
             log("Stopping voice-stop listener. Reason: \(reason)")
         }
@@ -331,6 +357,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 continuation.resume(returning: granted)
             }
         }
+    }
+
+    private func hasRecognizedContent(in transcript: String) -> Bool {
+        transcript.contains { !$0.isWhitespace && !$0.isPunctuation }
     }
 
     private func describe(_ status: SFSpeechRecognizerAuthorizationStatus) -> String {

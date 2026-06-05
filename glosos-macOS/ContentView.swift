@@ -9,63 +9,403 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var speechController = SpeechController()
-    @State private var textToRead = "Since the release of the first novel, Harry Potter and the Philosopher's Stone, on 26 June 1997, the books have found immense popularity and commercial success worldwide. They have attracted a wide adult audience as well as younger readers and are widely considered cornerstones of modern literature, though the books have received mixed reviews from critics and literary scholars. As of February 2023, the books have sold more than 600 million copies worldwide, making them the best-selling book series in history, available in dozens of languages. The last four books all set records as the fastest-selling books in history, with the final instalment selling roughly 2.7 million copies in the United Kingdom and 8.3 million copies in the United States within twenty-four hours of its release. Warner Bros. Pictures adapted the original seven books into an eight-part namesake film series. In 2016, the total value of the Harry Potter franchise was estimated at $25 billion, making it one of the highest-grossing media franchises of all time. Harry Potter and the Cursed Child is a play based on a story co-written by Rowling. A television series based on the books is in production at HBO. The success of the books and films has allowed the Harry Potter franchise to expand with numerous derivative works, a travelling exhibition that premiered in Chicago in 2009, a studio tour in London that opened in 2012, a digital platform on which J. K. Rowling updates the series with new information and insight, and a trilogy of spin-off films premiering in November 2016 with Fantastic Beasts and Where to Find Them, among many other developments. Themed attractions, collectively known as The Wizarding World of Harry Potter, have been built at several Universal Destinations & Experiences amusement parks around the world."
+    @StateObject private var agentController = AgentConnectionController()
+    @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
+    @State private var isShowingSettings = false
+    @State private var hasInitialized = false
+    @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
+    @State private var suppressNextAssistantPlayback = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Apple TTS Demo")
-                .font(.largeTitle.bold())
+        VStack(spacing: 0) {
+            header
 
-            Text("Paste English text")
-                .foregroundStyle(.secondary)
+            Divider()
+                .overlay(Color.black.opacity(0.06))
 
-            TextEditor(text: $textToRead)
-                .font(.body)
-                .frame(minHeight: 240)
-                .padding(12)
-                .background(.thinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            Button {
-                speechController.play(textToRead)
-            } label: {
-                Label(
-                    speechController.isSpeaking ? "Playing..." : "Play",
-                    systemImage: speechController.isSpeaking ? "waveform" : "play.fill"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(textToRead.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || speechController.isSpeaking)
-
-            Text(speechController.statusMessage)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Live transcription")
-                    .font(.headline)
-
+            ScrollViewReader { proxy in
                 ScrollView {
-                    Text(speechController.liveTranscript)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                    LazyVStack(spacing: 14) {
+                        if agentController.messages.isEmpty {
+                            emptyState
+                        }
+
+                        ForEach(agentController.messages) { message in
+                            ChatBubbleRow(message: message)
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id("chat-bottom")
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
                 }
-                .frame(minHeight: 160)
-                .padding(12)
-                .background(.thinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(chatBackground)
+                .onChange(of: agentController.messages) { _, _ in
+                    scrollToBottom(with: proxy)
+                }
+                .onChange(of: speechController.displayedLiveTranscript) { _, _ in
+                    scrollToBottom(with: proxy)
+                }
             }
+
+            liveTranscriptPanel
         }
-        .padding(24)
-        .frame(minWidth: 640, minHeight: 680)
+        .background(
+            LinearGradient(
+                colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsSheet(
+                agentController: agentController,
+                autoSpeakAgentReplies: $autoSpeakAgentReplies
+            )
+        }
         .task {
-            await speechController.preparePermissions()
-            await speechController.startContinuousListening()
+            await initializeIfNeeded()
+        }
+        .onChange(of: speechController.finalizedUtterance) { _, newValue in
+            guard let newValue else {
+                return
+            }
+
+            enqueueOrSend(newValue)
+        }
+        .onChange(of: agentController.latestCompletedAssistantMessage) { _, newValue in
+            guard let newValue else {
+                return
+            }
+
+            if autoSpeakAgentReplies, !suppressNextAssistantPlayback {
+                speechController.play(newValue.text)
+            }
+            suppressNextAssistantPlayback = false
+            sendPendingUtteranceIfPossible()
+        }
+        .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
+            sendPendingUtteranceIfPossible()
+        }
+        .onChange(of: speechController.playbackInterruptionToken) { _, newValue in
+            if newValue != nil {
+                suppressNextAssistantPlayback = true
+            }
         }
         .onDisappear {
+            agentController.disconnect()
             speechController.stopContinuousListening()
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Glosos")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+
+                Text("Voice chat")
+                    .font(.system(.subheadline, design: .rounded))
+                    .foregroundStyle(Color.black.opacity(0.5))
+            }
+
+            Spacer()
+
+            Label {
+                Text(agentController.statusDetail)
+                    .font(.system(.subheadline, design: .rounded))
+            } icon: {
+                Circle()
+                    .fill(agentController.isConnected ? Color(red: 0.16, green: 0.57, blue: 0.43) : Color(red: 0.78, green: 0.38, blue: 0.28))
+                    .frame(width: 10, height: 10)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(.white.opacity(0.72))
+            .clipShape(Capsule())
+
+            Button {
+                isShowingSettings = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.78))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+        .background(.ultraThinMaterial)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Text("Start speaking to begin")
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .foregroundStyle(Color(red: 0.18, green: 0.22, blue: 0.19))
+
+            Text("Your speech becomes chat bubbles automatically when the utterance ends.")
+                .font(.system(.body, design: .rounded))
+                .foregroundStyle(Color.black.opacity(0.5))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+    }
+
+    private var liveTranscriptPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    speechController.isCapturingSpeech ? "Listening now" : "Microphone ready",
+                    systemImage: speechController.isCapturingSpeech ? "waveform.badge.mic" : "mic.fill"
+                )
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(Color(red: 0.16, green: 0.20, blue: 0.17))
+
+                Spacer()
+
+                if agentController.isAwaitingAssistantResponse {
+                    Text("Agent replying")
+                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                        .foregroundStyle(Color.black.opacity(0.48))
+                }
+            }
+
+            Text(liveTranscriptText)
+                .font(.system(.body, design: .rounded))
+                .foregroundStyle(speechController.isCapturingSpeech ? Color.primary : Color.black.opacity(0.48))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let pendingText = pendingUtteranceCoordinator.pendingUtterance?.text {
+                Text("Queued next turn: \(pendingText)")
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(Color(red: 0.55, green: 0.33, blue: 0.17))
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+        .background(.white.opacity(0.82))
+    }
+
+    private var liveTranscriptText: String {
+        let transcript = speechController.displayedLiveTranscript
+        if !transcript.isEmpty {
+            return transcript
+        }
+
+        return agentController.isAwaitingAssistantResponse
+            ? "Speak at any time to interrupt voice playback. The newest finished utterance will send after the current reply completes."
+            : "Speak naturally. The app sends each finished utterance automatically."
+    }
+
+    private var chatBackground: some View {
+        ZStack {
+            Color(red: 0.97, green: 0.96, blue: 0.94)
+
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.55),
+                    Color(red: 0.90, green: 0.93, blue: 0.89).opacity(0.2)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    private func initializeIfNeeded() async {
+        guard !hasInitialized else {
+            return
+        }
+
+        hasInitialized = true
+        await speechController.preparePermissions()
+        await speechController.startContinuousListening()
+        agentController.connect()
+    }
+
+    private func enqueueOrSend(_ utterance: TranscribedUtterance) {
+        if let utteranceToSend = pendingUtteranceCoordinator.register(
+            utterance,
+            whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
+        ) {
+            _ = agentController.sendUserMessage(utteranceToSend.text)
+        }
+    }
+
+    private func sendPendingUtteranceIfPossible() {
+        guard let pendingUtterance = pendingUtteranceCoordinator.dequeueIfReady(
+            whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
+        ) else {
+            return
+        }
+
+        _ = agentController.sendUserMessage(pendingUtterance.text)
+    }
+
+    private func scrollToBottom(with proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo("chat-bottom", anchor: .bottom)
+            }
+        }
+    }
+}
+
+private struct ChatBubbleRow: View {
+    let message: ChatMessage
+
+    var body: some View {
+        switch message.role {
+        case .system:
+            Text(message.text)
+                .font(.system(.footnote, design: .rounded))
+                .foregroundStyle(message.state == .error ? Color(red: 0.70, green: 0.28, blue: 0.23) : Color.black.opacity(0.55))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.white.opacity(0.7))
+                .clipShape(Capsule())
+                .frame(maxWidth: .infinity)
+        case .user, .assistant:
+            HStack {
+                if message.role == .assistant {
+                    bubble
+                    Spacer(minLength: 56)
+                } else {
+                    Spacer(minLength: 56)
+                    bubble
+                }
+            }
+        }
+    }
+
+    private var bubble: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(.caption, design: .rounded).weight(.semibold))
+                .foregroundStyle(labelColor)
+
+            Text(message.text.isEmpty && message.state == .streaming ? "..." : message.text)
+                .font(.system(.body, design: .rounded))
+                .foregroundStyle(textColor)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .background(bubbleBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(borderColor, lineWidth: 1)
+        )
+        .frame(maxWidth: 420, alignment: message.role == .assistant ? .leading : .trailing)
+    }
+
+    private var label: String {
+        switch message.role {
+        case .assistant:
+            return message.state == .streaming ? "Agent is typing" : "Agent"
+        case .user:
+            return "You"
+        case .system:
+            return "System"
+        }
+    }
+
+    private var bubbleBackground: Color {
+        switch message.role {
+        case .assistant:
+            return Color.white.opacity(0.94)
+        case .user:
+            return Color(red: 0.18, green: 0.52, blue: 0.42).opacity(message.state == .error ? 0.70 : 0.96)
+        case .system:
+            return .clear
+        }
+    }
+
+    private var borderColor: Color {
+        switch message.role {
+        case .assistant:
+            return message.state == .error ? Color(red: 0.75, green: 0.41, blue: 0.35) : Color.black.opacity(0.06)
+        case .user:
+            return Color.white.opacity(0.15)
+        case .system:
+            return .clear
+        }
+    }
+
+    private var labelColor: Color {
+        switch message.role {
+        case .assistant:
+            return message.state == .error ? Color(red: 0.71, green: 0.31, blue: 0.24) : Color.black.opacity(0.44)
+        case .user:
+            return Color.white.opacity(0.78)
+        case .system:
+            return Color.black.opacity(0.44)
+        }
+    }
+
+    private var textColor: Color {
+        message.role == .user ? .white : Color(red: 0.14, green: 0.16, blue: 0.15)
+    }
+}
+
+private struct SettingsSheet: View {
+    @ObservedObject var agentController: AgentConnectionController
+    @Binding var autoSpeakAgentReplies: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Connection") {
+                    TextField("WebSocket URL", text: $agentController.socketURL)
+                    TextField("Session ID", text: $agentController.sessionID)
+
+                    HStack {
+                        Text("Status")
+                        Spacer()
+                        Text(agentController.connectionStatus)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button(agentController.isConnected ? "Reconnect" : "Connect") {
+                            agentController.connect()
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Disconnect") {
+                            agentController.disconnect()
+                        }
+                        .disabled(!agentController.isConnected)
+                    }
+                }
+
+                Section("Playback") {
+                    Toggle("Speak assistant replies aloud", isOn: $autoSpeakAgentReplies)
+                }
+            }
+            .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 420, minHeight: 280)
+        .onDisappear {
+            agentController.saveSettings()
         }
     }
 }
