@@ -433,6 +433,8 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
     nonisolated private static let initfsReference = "ghcr.io/apple/containerization/vminit:0.33.4"
     nonisolated private static let rootFilesystemSizeInBytes: UInt64 = 8 * 1024 * 1024 * 1024
     nonisolated private static let containerMemoryInBytes: UInt64 = 4 * 1024 * 1024 * 1024
+    nonisolated private static let rootFilesystemFilename = "rootfs.ext4"
+    nonisolated private static let imageReferenceMarkerFilename = ".glosos-image-reference"
 
     private var session: ActiveSession?
 
@@ -450,11 +452,6 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         updateStatus: @escaping @Sendable (String) async -> Void
     ) async throws -> ManagedRuntimeEndpoint {
         await stop(containerName: configuration.containerName, assets: assets)
-
-        let staleContainerRoot = assets.imageStoreURL
-            .appendingPathComponent("containers", isDirectory: true)
-            .appendingPathComponent(configuration.containerName, isDirectory: true)
-        try? FileManager.default.removeItem(at: staleContainerRoot)
 
         let kernel = Kernel(path: assets.kernelURL, platform: .linuxArm)
 
@@ -494,36 +491,78 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
             activity: "Pulling runtime image",
             updateStatus: updateStatus
         )
-        let runtimeFilesystemReporter = Self.makeProgressReporter(
-            activity: "Creating runtime filesystem",
-            updateStatus: updateStatus
+        let containerRootURL = Self.containerRootURL(
+            containerName: configuration.containerName,
+            imageStoreURL: assets.imageStoreURL
         )
-        await runtimeFilesystemReporter.reporter.reportInitialStatus()
+        let cachedRootfs = Self.cachedRuntimeFilesystemMount(
+            for: configuration,
+            at: containerRootURL
+        )
 
-        let container = try await manager.create(
-            configuration.containerName,
-            image: runtimeImage,
-            rootfsSizeInBytes: Self.rootFilesystemSizeInBytes,
-            progress: runtimeFilesystemReporter.progressHandler
-        ) { runtimeConfiguration in
-            runtimeConfiguration.cpus = 4
-            runtimeConfiguration.memoryInBytes = Self.containerMemoryInBytes
-            runtimeConfiguration.hostname = configuration.containerName
-            runtimeConfiguration.mounts.append(
-                .share(
-                    source: assets.userWorkspaceURL.path(percentEncoded: false),
-                    destination: "/app/user"
+        let container: LinuxContainer
+        if let cachedRootfs {
+            await updateStatus("Using cached runtime filesystem...")
+            container = try await manager.create(
+                configuration.containerName,
+                image: runtimeImage,
+                rootfs: cachedRootfs
+            ) { runtimeConfiguration in
+                runtimeConfiguration.cpus = 4
+                runtimeConfiguration.memoryInBytes = Self.containerMemoryInBytes
+                runtimeConfiguration.hostname = configuration.containerName
+                runtimeConfiguration.mounts.append(
+                    .share(
+                        source: assets.userWorkspaceURL.path(percentEncoded: false),
+                        destination: "/app/user"
+                    )
                 )
-            )
 
-            runtimeConfiguration.process.stdout = stdoutWriter
-            runtimeConfiguration.process.stderr = stderrWriter
-            runtimeConfiguration.process.environmentVariables = Self.mergeEnvironmentVariables(
-                runtimeConfiguration.process.environmentVariables,
-                with: configuration.environmentVariables
+                runtimeConfiguration.process.stdout = stdoutWriter
+                runtimeConfiguration.process.stderr = stderrWriter
+                runtimeConfiguration.process.environmentVariables = Self.mergeEnvironmentVariables(
+                    runtimeConfiguration.process.environmentVariables,
+                    with: configuration.environmentVariables
+                )
+            }
+        } else {
+            try? FileManager.default.removeItem(at: containerRootURL)
+
+            let runtimeFilesystemReporter = Self.makeProgressReporter(
+                activity: "Creating runtime filesystem",
+                updateStatus: updateStatus
+            )
+            await runtimeFilesystemReporter.reporter.reportInitialStatus()
+
+            container = try await manager.create(
+                configuration.containerName,
+                image: runtimeImage,
+                rootfsSizeInBytes: Self.rootFilesystemSizeInBytes,
+                progress: runtimeFilesystemReporter.progressHandler
+            ) { runtimeConfiguration in
+                runtimeConfiguration.cpus = 4
+                runtimeConfiguration.memoryInBytes = Self.containerMemoryInBytes
+                runtimeConfiguration.hostname = configuration.containerName
+                runtimeConfiguration.mounts.append(
+                    .share(
+                        source: assets.userWorkspaceURL.path(percentEncoded: false),
+                        destination: "/app/user"
+                    )
+                )
+
+                runtimeConfiguration.process.stdout = stdoutWriter
+                runtimeConfiguration.process.stderr = stderrWriter
+                runtimeConfiguration.process.environmentVariables = Self.mergeEnvironmentVariables(
+                    runtimeConfiguration.process.environmentVariables,
+                    with: configuration.environmentVariables
+                )
+            }
+            await runtimeFilesystemReporter.reporter.reportCompletion()
+            Self.writeRuntimeFilesystemMarker(
+                for: configuration,
+                at: containerRootURL
             )
         }
-        await runtimeFilesystemReporter.reporter.reportCompletion()
 
         await updateStatus("Starting container...")
         try await container.create()
@@ -553,19 +592,55 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         containerName: String,
         assets: ContainerRuntimeAssets?
     ) async {
+        let _ = assets
         guard var session, session.containerName == containerName else {
-            if let assets {
-                let staleContainerRoot = assets.imageStoreURL
-                    .appendingPathComponent("containers", isDirectory: true)
-                    .appendingPathComponent(containerName, isDirectory: true)
-                try? FileManager.default.removeItem(at: staleContainerRoot)
-            }
             return
         }
 
         try? await session.container.stop()
-        try? session.manager.delete(containerName)
+        try? session.manager.releaseNetwork(containerName)
         self.session = nil
+    }
+
+    nonisolated private static func containerRootURL(
+        containerName: String,
+        imageStoreURL: URL
+    ) -> URL {
+        imageStoreURL
+            .appendingPathComponent("containers", isDirectory: true)
+            .appendingPathComponent(containerName, isDirectory: true)
+    }
+
+    nonisolated private static func cachedRuntimeFilesystemMount(
+        for configuration: ManagedContainerConfiguration,
+        at containerRootURL: URL
+    ) -> Mount? {
+        let markerURL = containerRootURL.appendingPathComponent(imageReferenceMarkerFilename)
+        let rootfsURL = containerRootURL.appendingPathComponent(rootFilesystemFilename)
+
+        guard
+            let marker = try? String(contentsOf: markerURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            marker == configuration.image,
+            FileManager.default.fileExists(atPath: rootfsURL.path(percentEncoded: false))
+        else {
+            return nil
+        }
+
+        return .block(
+            format: "ext4",
+            source: rootfsURL.path(percentEncoded: false),
+            destination: "/",
+            options: []
+        )
+    }
+
+    nonisolated private static func writeRuntimeFilesystemMarker(
+        for configuration: ManagedContainerConfiguration,
+        at containerRootURL: URL
+    ) {
+        let markerURL = containerRootURL.appendingPathComponent(imageReferenceMarkerFilename)
+        try? configuration.image.write(to: markerURL, atomically: true, encoding: .utf8)
     }
 
     nonisolated private static func mergeEnvironmentVariables(
