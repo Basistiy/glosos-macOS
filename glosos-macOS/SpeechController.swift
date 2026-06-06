@@ -37,6 +37,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private var shouldKeepListening = false
     private var listenerRestartTask: Task<Void, Never>?
     private var recognitionCompletionTask: Task<Void, Never>?
+    private var utteranceSilenceTask: Task<Void, Never>?
     private var isAwaitingRecognitionFinalResult = false
     private var speechTurnCoordinator = SpeechTurnCoordinator()
     private var previewPlaybackCoordinator = AudioClipPreviewCoordinator()
@@ -70,6 +71,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }()
 
     private let recognitionCompletionTimeout: UInt64 = 1_500_000_000
+    private let utteranceSilenceTimeout: UInt64 = 1_200_000_000
 
     override init() {
         speechSegmentRecorder = LockedSpeechSegmentRecorder(sampleRate: VoiceProcessingIO.captureSampleRate)
@@ -228,6 +230,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         speechTurnCoordinator.reset()
         recognitionCompletionTask?.cancel()
         recognitionCompletionTask = nil
+        utteranceSilenceTask?.cancel()
+        utteranceSilenceTask = nil
         isAwaitingRecognitionFinalResult = false
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -302,6 +306,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         finalizePendingVADSpeechSegment(force: true)
+        finalizeRemainingTranscriptIfNeeded()
         tearDownRecognitionSession(cancelTask: cancelOutstandingTask)
 
         guard shouldActivelyListen else {
@@ -317,6 +322,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func handleTranscript(_ transcript: String, isFinal: Bool) {
+        let hasRecognizedContent = hasRecognizedContent(in: transcript)
+        if hasRecognizedContent {
+            scheduleUtteranceSilenceTimeout()
+        }
+
         if transcript == lastLoggedTranscript, !isFinal {
             return
         }
@@ -327,7 +337,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         let update = speechTurnCoordinator.recordTranscript(
             transcript,
-            hasRecognizedContent: hasRecognizedContent(in: transcript),
+            hasRecognizedContent: hasRecognizedContent,
             usingVAD: sileroVADProcessor.isReady,
             isFinal: isFinal,
             isPlaybackAudible: isPlaybackAudible
@@ -446,6 +456,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         listenerRestartTask = nil
         recognitionCompletionTask?.cancel()
         recognitionCompletionTask = nil
+        utteranceSilenceTask?.cancel()
+        utteranceSilenceTask = nil
         stopListening(reason: "microphone muted", shouldLog: true)
         voiceProcessingIO.stop()
         liveTranscript = "Microphone is muted."
@@ -703,6 +715,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         applySpeechTurnUpdate(update, interruptionLogMessage: nil)
     }
 
+    private func finalizeRemainingTranscriptIfNeeded() {
+        let update = speechTurnCoordinator.finalizeRemainingTranscriptIfNeeded(
+            usingVAD: sileroVADProcessor.isReady,
+            now: Date().timeIntervalSinceReferenceDate
+        )
+        applySpeechTurnUpdate(update, interruptionLogMessage: nil)
+    }
+
     private func endRecognitionRequestForCurrentUtterance() {
         guard recognitionRequest != nil, recognitionTask != nil else {
             finalizePendingVADSpeechSegment(force: true)
@@ -716,6 +736,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         isAwaitingRecognitionFinalResult = true
         recognitionCompletionTask?.cancel()
         recognitionCompletionTask = nil
+        utteranceSilenceTask?.cancel()
+        utteranceSilenceTask = nil
         log("Ending recognition request and waiting for final result.")
 
         voiceProcessingIO.setRecognitionRequest(nil)
@@ -741,9 +763,45 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    private func scheduleUtteranceSilenceTimeout() {
+        guard recognitionRequest != nil,
+              recognitionTask != nil,
+              !isAwaitingRecognitionFinalResult else {
+            return
+        }
+
+        utteranceSilenceTask?.cancel()
+        let timeout = utteranceSilenceTimeout
+        utteranceSilenceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: timeout)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                guard let self,
+                      self.recognitionRequest != nil,
+                      self.recognitionTask != nil,
+                      !self.isAwaitingRecognitionFinalResult else {
+                    return
+                }
+
+                self.log("Fallback silence timeout reached. Ending current utterance.")
+                if self.sileroVADProcessor.isReady, self.speechTurnCoordinator.isSpeechSegmentActive {
+                    self.speechSegmentRecorder.speechEnded()
+                    let update = self.speechTurnCoordinator.speechEnded(now: Date().timeIntervalSinceReferenceDate)
+                    self.applySpeechTurnUpdate(update, interruptionLogMessage: nil)
+                }
+                self.endRecognitionRequestForCurrentUtterance()
+            }
+        }
+    }
+
     private func tearDownRecognitionSession(cancelTask: Bool) {
         recognitionCompletionTask?.cancel()
         recognitionCompletionTask = nil
+        utteranceSilenceTask?.cancel()
+        utteranceSilenceTask = nil
         isAwaitingRecognitionFinalResult = false
 
         if cancelTask {

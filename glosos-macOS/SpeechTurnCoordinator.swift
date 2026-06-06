@@ -130,6 +130,20 @@ struct SpeechTurnCoordinator {
         return finalizeSegment(endedAt: pendingSegmentEndTime)
     }
 
+    mutating func finalizeRemainingTranscriptIfNeeded(usingVAD: Bool, now: TimeInterval) -> SpeechTurnUpdate {
+        if usingVAD {
+            if let pendingSegmentEndTime {
+                return finalizeSegment(endedAt: pendingSegmentEndTime)
+            }
+
+            if isSpeechSegmentActive {
+                return finalizeSegment(endedAt: now)
+            }
+        }
+
+        return finalizeLatestRecognizedTranscriptIfNeeded()
+    }
+
     private mutating func finalizeSegment(endedAt endTime: TimeInterval) -> SpeechTurnUpdate {
         let segmentStartTime = speechSegmentStartTime ?? endTime
         let finalizedText = shouldFinalizeSegment(endedAt: endTime, startedAt: segmentStartTime)
@@ -160,5 +174,25 @@ struct SpeechTurnCoordinator {
         }
 
         return endTime - startTime >= minimumSpeechDuration
+    }
+
+    private mutating func finalizeLatestRecognizedTranscriptIfNeeded() -> SpeechTurnUpdate {
+        let trimmed = latestRecognizedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !didEmitFinalUtteranceForCurrentSession else {
+            return SpeechTurnUpdate()
+        }
+
+        didEmitFinalUtteranceForCurrentSession = true
+        latestRecognizedTranscript = ""
+        currentSegmentTranscript = ""
+        speechSegmentStartTime = nil
+        pendingSegmentEndTime = nil
+        isSpeechSegmentActive = false
+        didInterruptPlaybackForCurrentSegment = false
+
+        return SpeechTurnUpdate(
+            finalizedText: trimmed,
+            shouldClearTranscript: true
+        )
     }
 }

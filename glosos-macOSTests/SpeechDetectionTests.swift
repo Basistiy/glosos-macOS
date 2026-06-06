@@ -284,6 +284,44 @@ struct SpeechDetectionTests {
     }
 
     @Test
+    func coordinatorFallsBackToLatestTranscriptWhenVadMissesBoundary() throws {
+        var coordinator = SpeechTurnCoordinator()
+
+        _ = coordinator.recordTranscript(
+            "create a new project",
+            hasRecognizedContent: true,
+            usingVAD: true,
+            isFinal: false,
+            isPlaybackAudible: false
+        )
+
+        let update = coordinator.finalizeRemainingTranscriptIfNeeded(usingVAD: true, now: 18.0)
+
+        #expect(update.finalizedText == "create a new project")
+        #expect(update.shouldClearTranscript == true)
+        #expect(update.didFinalizeSpeechSegment == false)
+    }
+
+    @Test
+    func coordinatorFallsBackToLatestTranscriptWithoutAppleFinalResult() throws {
+        var coordinator = SpeechTurnCoordinator()
+
+        _ = coordinator.recordTranscript(
+            "fallback only",
+            hasRecognizedContent: true,
+            usingVAD: false,
+            isFinal: false,
+            isPlaybackAudible: false
+        )
+
+        let update = coordinator.finalizeRemainingTranscriptIfNeeded(usingVAD: false, now: 22.0)
+
+        #expect(update.finalizedText == "fallback only")
+        #expect(update.shouldClearTranscript == true)
+        #expect(update.didFinalizeSpeechSegment == false)
+    }
+
+    @Test
     func coordinatorFlushesPendingSegmentBeforeStartingNextOne() throws {
         var coordinator = SpeechTurnCoordinator()
 
