@@ -24,6 +24,7 @@ struct SpeechTurnCoordinator {
     private(set) var speechSegmentStartTime: TimeInterval?
     private(set) var pendingSegmentEndTime: TimeInterval?
     private(set) var didEmitFinalUtteranceForCurrentSession = false
+    private(set) var didInterruptPlaybackForCurrentSegment = false
 
     init(
         minimumSpeechDuration: TimeInterval = 0.2,
@@ -40,6 +41,7 @@ struct SpeechTurnCoordinator {
         speechSegmentStartTime = nil
         pendingSegmentEndTime = nil
         didEmitFinalUtteranceForCurrentSession = false
+        didInterruptPlaybackForCurrentSegment = false
     }
 
     mutating func recordTranscript(
@@ -60,10 +62,16 @@ struct SpeechTurnCoordinator {
         latestRecognizedTranscript = trimmed
 
         if usingVAD {
+            var update = SpeechTurnUpdate()
             if isSpeechSegmentActive {
                 currentSegmentTranscript = trimmed
+
+                if isPlaybackAudible, !didInterruptPlaybackForCurrentSegment {
+                    didInterruptPlaybackForCurrentSegment = true
+                    update.shouldInterruptPlayback = true
+                }
             }
-            return SpeechTurnUpdate()
+            return update
         }
 
         var update = SpeechTurnUpdate()
@@ -93,12 +101,11 @@ struct SpeechTurnCoordinator {
         isSpeechSegmentActive = true
         speechSegmentStartTime = now
         pendingSegmentEndTime = nil
+        didInterruptPlaybackForCurrentSegment = false
 
         if !latestRecognizedTranscript.isEmpty {
             currentSegmentTranscript = latestRecognizedTranscript
         }
-
-        update.shouldInterruptPlayback = isPlaybackAudible
         return update
     }
 
@@ -134,6 +141,7 @@ struct SpeechTurnCoordinator {
         currentSegmentTranscript = ""
         speechSegmentStartTime = nil
         pendingSegmentEndTime = nil
+        didInterruptPlaybackForCurrentSegment = false
 
         guard let finalizedText, !finalizedText.isEmpty else {
             return SpeechTurnUpdate(shouldClearTranscript: true, didFinalizeSpeechSegment: true)

@@ -211,6 +211,11 @@ final class ApplicationSupportContainerAssetManager: @unchecked Sendable, Contai
             .appendingPathComponent("Containerization", isDirectory: true)
     }
 
+    nonisolated static func defaultUserWorkspaceURL(fileManager: FileManager = .default) -> URL {
+        defaultSupportRootURL(fileManager: fileManager)
+            .appendingPathComponent("user", isDirectory: true)
+    }
+
     nonisolated private static func extractKernel(from archiveURL: URL, to destinationURL: URL) throws {
         var targetPath = kernelPathInArchive
         var archiveReader = try ArchiveReader(file: archiveURL)

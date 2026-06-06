@@ -124,13 +124,35 @@ struct SpeechDetectionTests {
     }
 
     @Test
-    func coordinatorInterruptsPlaybackOnlyOncePerSpeechSegment() throws {
+    func coordinatorDoesNotInterruptPlaybackOnVadStartAlone() throws {
         var coordinator = SpeechTurnCoordinator()
         let startUpdate = coordinator.speechStarted(isPlaybackAudible: true, now: 10)
-        let repeatedUpdate = coordinator.speechStarted(isPlaybackAudible: true, now: 10.05)
 
-        #expect(startUpdate.shouldInterruptPlayback == true)
-        #expect(repeatedUpdate.shouldInterruptPlayback == false)
+        #expect(startUpdate.shouldInterruptPlayback == false)
+    }
+
+    @Test
+    func coordinatorInterruptsPlaybackOnlyOncePerSpeechSegmentAfterTranscriptArrives() throws {
+        var coordinator = SpeechTurnCoordinator()
+        _ = coordinator.speechStarted(isPlaybackAudible: true, now: 10)
+
+        let firstTranscriptUpdate = coordinator.recordTranscript(
+            "stop",
+            hasRecognizedContent: true,
+            usingVAD: true,
+            isFinal: false,
+            isPlaybackAudible: true
+        )
+        let repeatedTranscriptUpdate = coordinator.recordTranscript(
+            "stop now",
+            hasRecognizedContent: true,
+            usingVAD: true,
+            isFinal: false,
+            isPlaybackAudible: true
+        )
+
+        #expect(firstTranscriptUpdate.shouldInterruptPlayback == true)
+        #expect(repeatedTranscriptUpdate.shouldInterruptPlayback == false)
     }
 
     @Test

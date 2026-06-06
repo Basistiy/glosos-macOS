@@ -259,6 +259,29 @@ final class LocalRuntimeController: ObservableObject {
         resolvedConfiguration != nil
     }
 
+    var managedUserFolderURL: URL {
+        if let assets = try? assetManager.existingAssets() {
+            return assets.userWorkspaceURL
+        }
+
+        return ApplicationSupportContainerAssetManager.defaultUserWorkspaceURL()
+    }
+
+    var managedUserFolderPath: String {
+        managedUserFolderURL.path(percentEncoded: false)
+    }
+
+    func saveSettings() {
+        userDefaults.set(runtimeMode.rawValue, forKey: Self.runtimeModeKey)
+        userDefaults.set(managedContainerImage, forKey: Self.managedContainerImageKey)
+        userDefaults.set(managedContainerName, forKey: Self.managedContainerNameKey)
+        userDefaults.set(managedModelName, forKey: Self.managedModelNameKey)
+        userDefaults.set(managedGoogleAPIKey, forKey: Self.managedGoogleAPIKeyKey)
+        userDefaults.set(managedUseVertexAI, forKey: Self.managedUseVertexAIKey)
+        userDefaults.set(managedGoogleCloudProject, forKey: Self.managedGoogleCloudProjectKey)
+        userDefaults.set(managedGoogleCloudLocation, forKey: Self.managedGoogleCloudLocationKey)
+    }
+
     func refreshStatus() async {
         lastRuntimeError = nil
         recentLogs = ""

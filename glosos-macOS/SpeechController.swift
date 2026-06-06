@@ -22,15 +22,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private let playbackSynthesizer = AVSpeechSynthesizer()
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let speechVoice = AVSpeechSynthesisVoice(language: "en-US")
-    private let voiceProcessingIO: VoiceProcessingIO
-    private let sileroVADProcessor: SileroVADProcessor
     private let speechSegmentRecorder: LockedSpeechSegmentRecorder
     private let clipStorageDirectory: URL
 
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var previewAudioPlayer: AVAudioPlayer?
-    private var hasPreparedPermissions = false
     private var canListenForTranscription = false
     private var isListeningContinuously = false
     private var isShuttingDownListener = false
@@ -44,6 +41,33 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private var speechTurnCoordinator = SpeechTurnCoordinator()
     private var previewPlaybackCoordinator = AudioClipPreviewCoordinator()
     private var shouldResumeListeningAfterPreviewPlayback = false
+    private var speechAuthorizationStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
+    private var microphoneAuthorizationStatus: AVAuthorizationStatus = .notDetermined
+    private lazy var voiceProcessingIO: VoiceProcessingIO = VoiceProcessingIO(logHandler: { message in
+        print("[VoiceStop] \(message)")
+    })
+    private lazy var sileroVADProcessor: SileroVADProcessor = {
+        let processor = SileroVADProcessor(logHandler: { message in
+            print("[VoiceStop] \(message)")
+        })
+        processor.onSpeechStarted = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.handleVADSpeechStarted()
+            }
+        }
+        processor.onSpeechEnded = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                self.handleVADSpeechEnded()
+            }
+        }
+        return processor
+    }()
 
     private let recognitionCompletionTimeout: UInt64 = 1_500_000_000
 
@@ -52,12 +76,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         clipStorageDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("glosos-mic-clips", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        sileroVADProcessor = SileroVADProcessor(logHandler: { message in
-            print("[VoiceStop] \(message)")
-        })
-        voiceProcessingIO = VoiceProcessingIO(logHandler: { message in
-            print("[VoiceStop] \(message)")
-        })
         super.init()
         playbackSynthesizer.delegate = self
         try? FileManager.default.createDirectory(
@@ -65,23 +83,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             withIntermediateDirectories: true,
             attributes: nil
         )
-        sileroVADProcessor.onSpeechStarted = { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-                self.handleVADSpeechStarted()
-            }
-        }
-        sileroVADProcessor.onSpeechEnded = { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self else {
-                    return
-                }
-                self.handleVADSpeechEnded()
-            }
-        }
-        sileroVADProcessor.loadModelIfNeeded()
     }
 
     var isCapturingSpeech: Bool {
@@ -101,30 +102,36 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         isMicrophoneMuted ? unmuteMicrophone() : muteMicrophone()
     }
 
+    var isReadyForLiveTranscription: Bool {
+        canListenForTranscription
+    }
+
+    func refreshPermissionState() {
+        applyPermissionState(
+            speechStatus: SFSpeechRecognizer.authorizationStatus(),
+            microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio)
+        )
+    }
+
     func preparePermissions() async {
-        guard !hasPreparedPermissions else {
-            return
-        }
-
-        hasPreparedPermissions = true
-
-        let speechStatus = await requestSpeechAuthorization()
-        let microphoneGranted = await requestMicrophonePermission()
-        let recognizerAvailable = speechRecognizer?.isAvailable == true
-
-        log("Speech auth: \(describe(speechStatus))")
-        log("Microphone auth: \(microphoneGranted ? "granted" : "denied")")
-        log("Recognizer available: \(recognizerAvailable)")
-        sileroVADProcessor.loadModelIfNeeded()
-
-        canListenForTranscription = speechStatus == .authorized && microphoneGranted && recognizerAvailable
-
-        if canListenForTranscription {
-            refreshStatusMessage()
+        let currentSpeechStatus = SFSpeechRecognizer.authorizationStatus()
+        let speechStatus = if currentSpeechStatus == .notDetermined {
+            await requestSpeechAuthorization()
         } else {
-            statusMessage = "Microphone and Speech Recognition access are needed for live transcription."
-            liveTranscript = "Microphone permission is required."
+            currentSpeechStatus
         }
+
+        let currentMicrophoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let microphoneStatus = if currentMicrophoneStatus == .notDetermined {
+            await requestMicrophonePermission()
+        } else {
+            currentMicrophoneStatus
+        }
+
+        applyPermissionState(
+            speechStatus: speechStatus,
+            microphoneStatus: microphoneStatus
+        )
     }
 
     func play(_ text: String) {
@@ -556,6 +563,41 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         activePreviewClipID = previewPlaybackCoordinator.activeClipID
     }
 
+    private func applyPermissionState(
+        speechStatus: SFSpeechRecognizerAuthorizationStatus,
+        microphoneStatus: AVAuthorizationStatus
+    ) {
+        speechAuthorizationStatus = speechStatus
+        microphoneAuthorizationStatus = microphoneStatus
+
+        let recognizerAvailable = speechRecognizer?.isAvailable == true
+
+        log("Speech auth: \(describe(speechStatus))")
+        log("Microphone auth: \(describe(microphoneStatus))")
+        log("Recognizer available: \(recognizerAvailable)")
+        canListenForTranscription = speechStatus == .authorized
+            && microphoneStatus == .authorized
+            && recognizerAvailable
+
+        if canListenForTranscription {
+            if liveTranscript == "Waiting for speech..." {
+                refreshStatusMessage()
+            }
+            return
+        }
+
+        if [speechStatus].contains(where: { $0 == .denied || $0 == .restricted })
+            || [microphoneStatus].contains(where: { $0 == .denied || $0 == .restricted }) {
+            statusMessage = "Enable Microphone and Speech Recognition in System Settings to use live transcription."
+        } else {
+            statusMessage = "Enable Microphone and Speech Recognition when you want to speak to the agent."
+        }
+
+        if !isMicrophoneMuted {
+            liveTranscript = "Waiting for speech..."
+        }
+    }
+
     private func consumeNextPendingUserAudioClip() -> UserAudioClip? {
         guard let segment = speechSegmentRecorder.consumePendingSegment() else {
             return nil
@@ -625,10 +667,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
-    private func requestMicrophonePermission() async -> Bool {
+    private func requestMicrophonePermission() async -> AVAuthorizationStatus {
         await withCheckedContinuation { continuation in
-            AVAudioApplication.requestRecordPermission { granted in
-                continuation.resume(returning: granted)
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                continuation.resume(returning: AVCaptureDevice.authorizationStatus(for: .audio))
             }
         }
     }
@@ -745,6 +787,21 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func describe(_ status: SFSpeechRecognizerAuthorizationStatus) -> String {
+        switch status {
+        case .authorized:
+            return "authorized"
+        case .denied:
+            return "denied"
+        case .restricted:
+            return "restricted"
+        case .notDetermined:
+            return "notDetermined"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private func describe(_ status: AVAuthorizationStatus) -> String {
         switch status {
         case .authorized:
             return "authorized"

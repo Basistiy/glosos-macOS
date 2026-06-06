@@ -5,6 +5,7 @@
 //  Created by EV on 6/3/26.
 //
 
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -149,6 +150,17 @@ struct ContentView: View {
             .clipShape(Capsule())
 
             Button {
+                openManagedUserFolder()
+            } label: {
+                Image(systemName: "folder")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.78))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
                 isShowingSettings = true
             } label: {
                 Image(systemName: "slider.horizontal.3")
@@ -199,19 +211,37 @@ struct ContentView: View {
                 }
 
                 Button {
-                    speechController.toggleMicrophoneMute()
+                    if speechController.isReadyForLiveTranscription {
+                        speechController.toggleMicrophoneMute()
+                    } else {
+                        Task {
+                            await speechController.startContinuousListening()
+                        }
+                    }
                 } label: {
                     Label(
-                        speechController.isMicrophoneMuted ? "Unmute" : "Mute",
-                        systemImage: speechController.isMicrophoneMuted ? "mic.fill" : "mic.slash.fill"
+                        speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? "Unmute" : "Mute")
+                            : "Enable Mic",
+                        systemImage: speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? "mic.fill" : "mic.slash.fill")
+                            : "mic.badge.plus"
                     )
                     .font(.system(.caption, design: .rounded).weight(.semibold))
-                    .foregroundStyle(speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
+                    .foregroundStyle(
+                        speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
+                            : Color(red: 0.35, green: 0.24, blue: 0.18)
+                    )
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
-                        speechController.isMicrophoneMuted
-                            ? Color(red: 0.73, green: 0.34, blue: 0.21)
+                        speechController.isReadyForLiveTranscription
+                            ? (
+                                speechController.isMicrophoneMuted
+                                    ? Color(red: 0.73, green: 0.34, blue: 0.21)
+                                    : Color(red: 0.95, green: 0.89, blue: 0.84)
+                            )
                             : Color(red: 0.95, green: 0.89, blue: 0.84)
                     )
                     .clipShape(Capsule())
@@ -237,6 +267,10 @@ struct ContentView: View {
     }
 
     private var liveTranscriptText: String {
+        if !speechController.isReadyForLiveTranscription {
+            return speechController.statusMessage
+        }
+
         if speechController.isMicrophoneMuted {
             return agentController.isAwaitingAssistantResponse
                 ? "Microphone is muted. Assistant playback will continue without spoken interruptions until you unmute."
@@ -300,14 +334,32 @@ struct ContentView: View {
         return Color(red: 0.16, green: 0.20, blue: 0.17)
     }
 
+    private func openManagedUserFolder() {
+        let userFolderURL = runtimeController.managedUserFolderURL
+
+        do {
+            try FileManager.default.createDirectory(
+                at: userFolderURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            NSWorkspace.shared.open(userFolderURL.deletingLastPathComponent())
+            return
+        }
+
+        NSWorkspace.shared.open(userFolderURL)
+    }
+
     private func initializeIfNeeded() async {
         guard !hasInitialized else {
             return
         }
 
         hasInitialized = true
-        await speechController.preparePermissions()
-        await speechController.startContinuousListening()
+        speechController.refreshPermissionState()
+        if speechController.isReadyForLiveTranscription {
+            await speechController.startContinuousListening()
+        }
         await runtimeController.refreshStatus()
         await connectUsingSelectedRuntime()
     }
@@ -566,6 +618,21 @@ private struct SettingsSheet: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        HStack(alignment: .top, spacing: 12) {
+                            Text("User folder")
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 8) {
+                                Text(runtimeController.managedUserFolderPath)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                                    .textSelection(.enabled)
+
+                                Button("Open in Finder") {
+                                    openManagedUserFolder()
+                                }
+                            }
+                        }
+
                         HStack {
                             Text("Runtime status")
                             Spacer()
@@ -665,8 +732,26 @@ private struct SettingsSheet: View {
         }
         .frame(minWidth: 460, minHeight: 420)
         .onDisappear {
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            runtimeController.saveSettings()
             agentController.saveSettings()
         }
+    }
+
+    private func openManagedUserFolder() {
+        let userFolderURL = runtimeController.managedUserFolderURL
+
+        do {
+            try FileManager.default.createDirectory(
+                at: userFolderURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            NSWorkspace.shared.open(userFolderURL.deletingLastPathComponent())
+            return
+        }
+
+        NSWorkspace.shared.open(userFolderURL)
     }
 }
 
