@@ -190,6 +190,7 @@ final class LocalRuntimeController: ObservableObject {
     private static let legacyManualRuntimeMode = "manualWebSocket"
     private static let defaultManualEndpointURL = AgentEndpoint.defaultLocalBaseURLString
     private static let legacyDefaultManualSocketURL = "ws://127.0.0.1:18000/ws"
+    private static let runtimeHealthTimeoutSeconds: TimeInterval = 20
 
     init(
         userDefaults: UserDefaults = .standard,
@@ -321,33 +322,16 @@ final class LocalRuntimeController: ObservableObject {
                 }
             }
 
-            let endpoint = try await runtimeManager.start(
+            let updateStatus: @Sendable (String) async -> Void = { [weak self] status in
+                await MainActor.run {
+                    self?.runtimeStatusDetail = status
+                }
+            }
+            let endpoint = try await startManagedRuntimeWithRecovery(
                 configuration: configuration,
                 assets: assets,
-                updateStatus: { [weak self] status in
-                    await MainActor.run {
-                        self?.runtimeStatusDetail = status
-                    }
-                }
+                updateStatus: updateStatus
             )
-
-            runtimeStatusDetail = "Waiting for runtime endpoint..."
-            let isHealthy = await healthChecker.waitUntilHealthy(
-                endpoint: endpoint,
-                timeoutSeconds: 20
-            )
-
-            guard isHealthy else {
-                await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
-                recentLogs = await assetManager.recentLogs(
-                    containerName: configuration.containerName,
-                    assets: assets
-                )
-                throw RuntimePreparationError.failed(
-                    "Container started, but the runtime endpoint never became ready."
-                )
-            }
-
             currentManagedEndpoint = endpoint
             runtimeState = .running
             runtimeStatusDetail = "Running at \(endpoint.displayString)"
@@ -478,6 +462,65 @@ final class LocalRuntimeController: ObservableObject {
         runtimeStatusDetail = "Managed runtime failed."
         lastRuntimeError = message
         currentManagedEndpoint = nil
+    }
+
+    private func startManagedRuntimeWithRecovery(
+        configuration: ManagedContainerConfiguration,
+        assets: ContainerRuntimeAssets,
+        updateStatus: @escaping @Sendable (String) async -> Void
+    ) async throws -> ManagedRuntimeEndpoint {
+        do {
+            return try await startManagedRuntime(
+                configuration: configuration,
+                assets: assets,
+                reuseCachedFilesystem: true,
+                updateStatus: updateStatus
+            )
+        } catch {
+            await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
+            await updateStatus("Cached runtime filesystem failed. Rebuilding...")
+            return try await startManagedRuntime(
+                configuration: configuration,
+                assets: assets,
+                reuseCachedFilesystem: false,
+                updateStatus: updateStatus
+            )
+        }
+    }
+
+    private func startManagedRuntime(
+        configuration: ManagedContainerConfiguration,
+        assets: ContainerRuntimeAssets,
+        reuseCachedFilesystem: Bool,
+        updateStatus: @escaping @Sendable (String) async -> Void
+    ) async throws -> ManagedRuntimeEndpoint {
+        let endpoint = try await runtimeManager.start(
+            configuration: configuration,
+            assets: assets,
+            reuseCachedFilesystem: reuseCachedFilesystem,
+            updateStatus: updateStatus
+        )
+
+        runtimeStatusDetail = "Waiting for runtime endpoint..."
+        let isHealthy = await healthChecker.waitUntilHealthy(
+            endpoint: endpoint,
+            timeoutSeconds: Self.runtimeHealthTimeoutSeconds
+        )
+
+        guard isHealthy else {
+            await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
+            recentLogs = await assetManager.recentLogs(
+                containerName: configuration.containerName,
+                assets: assets
+            )
+            throw RuntimePreparationError.failed(
+                reuseCachedFilesystem
+                    ? "Cached runtime filesystem produced an unhealthy runtime endpoint."
+                    : "Container started, but the runtime endpoint never became ready."
+            )
+        }
+
+        return endpoint
     }
 
     private static func environmentBoolean(named name: String) -> Bool {

@@ -144,22 +144,48 @@ struct ChatMessage: Identifiable, Equatable {
     let role: Role
     var text: String
     var state: State
+    var audioClip: UserAudioClip?
 
-    init(id: UUID = UUID(), role: Role, text: String, state: State = .final) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        text: String,
+        state: State = .final,
+        audioClip: UserAudioClip? = nil
+    ) {
         self.id = id
         self.role = role
         self.text = text
         self.state = state
+        self.audioClip = audioClip
+    }
+
+    var hasPlayableAudioClip: Bool {
+        role == .user && audioClip != nil
+    }
+}
+
+struct UserAudioClip: Identifiable, Equatable {
+    let id: UUID
+    let fileURL: URL
+    let duration: TimeInterval
+
+    init(id: UUID = UUID(), fileURL: URL, duration: TimeInterval) {
+        self.id = id
+        self.fileURL = fileURL
+        self.duration = duration
     }
 }
 
 struct TranscribedUtterance: Identifiable, Equatable {
     let id: UUID
     let text: String
+    let audioClip: UserAudioClip?
 
-    init(id: UUID = UUID(), text: String) {
+    init(id: UUID = UUID(), text: String, audioClip: UserAudioClip? = nil) {
         self.id = id
         self.text = text
+        self.audioClip = audioClip
     }
 }
 

@@ -11,6 +11,7 @@ struct SpeechTurnUpdate: Equatable {
     var shouldInterruptPlayback = false
     var finalizedText: String?
     var shouldClearTranscript = false
+    var didFinalizeSpeechSegment = false
 }
 
 struct SpeechTurnCoordinator {
@@ -135,10 +136,14 @@ struct SpeechTurnCoordinator {
         pendingSegmentEndTime = nil
 
         guard let finalizedText, !finalizedText.isEmpty else {
-            return SpeechTurnUpdate(shouldClearTranscript: true)
+            return SpeechTurnUpdate(shouldClearTranscript: true, didFinalizeSpeechSegment: true)
         }
 
-        return SpeechTurnUpdate(finalizedText: finalizedText, shouldClearTranscript: true)
+        return SpeechTurnUpdate(
+            finalizedText: finalizedText,
+            shouldClearTranscript: true,
+            didFinalizeSpeechSegment: true
+        )
     }
 
     private func shouldFinalizeSegment(endedAt endTime: TimeInterval, startedAt startTime: TimeInterval) -> Bool {

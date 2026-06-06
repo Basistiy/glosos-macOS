@@ -45,6 +45,7 @@ protocol ContainerRuntimeManaging {
     func start(
         configuration: ManagedContainerConfiguration,
         assets: ContainerRuntimeAssets,
+        reuseCachedFilesystem: Bool,
         updateStatus: @escaping @Sendable (String) async -> Void
     ) async throws -> ManagedRuntimeEndpoint
     func stop(
@@ -449,6 +450,7 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
     func start(
         configuration: ManagedContainerConfiguration,
         assets: ContainerRuntimeAssets,
+        reuseCachedFilesystem: Bool,
         updateStatus: @escaping @Sendable (String) async -> Void
     ) async throws -> ManagedRuntimeEndpoint {
         await stop(containerName: configuration.containerName, assets: assets)
@@ -495,10 +497,9 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
             containerName: configuration.containerName,
             imageStoreURL: assets.imageStoreURL
         )
-        let cachedRootfs = Self.cachedRuntimeFilesystemMount(
-            for: configuration,
-            at: containerRootURL
-        )
+        let cachedRootfs = reuseCachedFilesystem
+            ? Self.cachedRuntimeFilesystemMount(for: configuration, at: containerRootURL)
+            : nil
 
         let container: LinuxContainer
         if let cachedRootfs {

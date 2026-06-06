@@ -14,7 +14,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
     private static let channelCount: AVAudioChannelCount = 1
     private static let inputBus: AudioUnitElement = 1
     private static let outputBus: AudioUnitElement = 0
-    private static let captureSampleRate = Int(sampleRate)
+    static let captureSampleRate = Int(sampleRate)
 
     let clientFormat: AVAudioFormat
     private let logHandler: @Sendable (String) -> Void

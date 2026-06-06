@@ -53,6 +53,26 @@ struct glosos_macOSTests {
     }
 
     @Test
+    @MainActor
+    func userAudioClipIsPreservedOnLocalUserBubble() async throws {
+        let controller = AgentConnectionController()
+        let clip = UserAudioClip(
+            id: UUID(),
+            fileURL: URL(fileURLWithPath: "/tmp/test-user-clip.wav"),
+            duration: 0.8
+        )
+
+        _ = controller.beginAssistantTurn(
+            userUtterance: TranscribedUtterance(text: "Hello there", audioClip: clip)
+        )
+
+        #expect(controller.messages.count == 2)
+        #expect(controller.messages[0].role == .user)
+        #expect(controller.messages[0].audioClip == clip)
+        #expect(controller.messages[0].hasPlayableAudioClip)
+    }
+
+    @Test
     func pendingUtteranceWaitsUntilAssistantTurnCompletes() async throws {
         var coordinator = PendingUtteranceCoordinator()
         let utterance = TranscribedUtterance(text: "Second turn")

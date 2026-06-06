@@ -32,7 +32,7 @@ struct ContentView: View {
                         }
 
                         ForEach(agentController.messages) { message in
-                            ChatBubbleRow(message: message)
+                            ChatBubbleRow(message: message, speechController: speechController)
                         }
 
                         Color.clear
@@ -352,7 +352,7 @@ struct ContentView: View {
             utterance,
             whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
         ) {
-            _ = agentController.sendUserMessage(utteranceToSend.text)
+            _ = agentController.sendUserMessage(utteranceToSend)
         }
     }
 
@@ -363,7 +363,7 @@ struct ContentView: View {
             return
         }
 
-        _ = agentController.sendUserMessage(pendingUtterance.text)
+        _ = agentController.sendUserMessage(pendingUtterance)
     }
 
     private func scrollToBottom(with proxy: ScrollViewProxy) {
@@ -377,6 +377,7 @@ struct ContentView: View {
 
 private struct ChatBubbleRow: View {
     let message: ChatMessage
+    @ObservedObject var speechController: SpeechController
 
     var body: some View {
         switch message.role {
@@ -412,6 +413,29 @@ private struct ChatBubbleRow: View {
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(textColor)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let audioClip = message.audioClip, message.hasPlayableAudioClip {
+                Button {
+                    speechController.toggleUserAudioClipPlayback(audioClip)
+                } label: {
+                    Label(
+                        speechController.activePreviewClipID == audioClip.id
+                            ? "Stop clip"
+                            : "Play clip \(formattedDuration(audioClip.duration))",
+                        systemImage: speechController.activePreviewClipID == audioClip.id
+                            ? "stop.fill"
+                            : "play.fill"
+                    )
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.14))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -470,6 +494,10 @@ private struct ChatBubbleRow: View {
 
     private var textColor: Color {
         message.role == .user ? .white : Color(red: 0.14, green: 0.16, blue: 0.15)
+    }
+
+    private func formattedDuration(_ duration: TimeInterval) -> String {
+        String(format: "%.1fs", duration)
     }
 }
 

@@ -173,7 +173,7 @@ final class AgentConnectionController: ObservableObject {
     }
 
     @discardableResult
-    func sendUserMessage(_ text: String) -> Bool {
+    func sendUserMessage(_ utterance: TranscribedUtterance) -> Bool {
         guard isConnected else {
             connectionStatus = "Disconnected"
             appendSystemMessage("The app is not connected to the local agent.", state: .error)
@@ -186,7 +186,7 @@ final class AgentConnectionController: ObservableObject {
             return false
         }
 
-        let trimmedMessage = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedMessage = utterance.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmedSessionID.isEmpty else {
@@ -200,7 +200,7 @@ final class AgentConnectionController: ObservableObject {
         }
 
         saveSettings()
-        let assistantMessageID = beginAssistantTurn(userText: trimmedMessage)
+        let assistantMessageID = beginAssistantTurn(userUtterance: utterance)
         connectionStatus = "Sending message..."
         activeRequestTask?.cancel()
         userInitiatedDisconnect = false
@@ -245,11 +245,22 @@ final class AgentConnectionController: ObservableObject {
     }
 
     @discardableResult
-    func beginAssistantTurn(userText: String) -> UUID {
-        let trimmedText = userText.trimmingCharacters(in: .whitespacesAndNewlines)
+    func sendUserMessage(_ text: String) -> Bool {
+        sendUserMessage(TranscribedUtterance(text: text))
+    }
+
+    @discardableResult
+    func beginAssistantTurn(userUtterance: TranscribedUtterance) -> UUID {
+        let trimmedText = userUtterance.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let assistantMessageID = UUID()
 
-        messages.append(ChatMessage(role: .user, text: trimmedText))
+        messages.append(
+            ChatMessage(
+                role: .user,
+                text: trimmedText,
+                audioClip: userUtterance.audioClip
+            )
+        )
         messages.append(
             ChatMessage(id: assistantMessageID, role: .assistant, text: "", state: .streaming)
         )
@@ -259,6 +270,11 @@ final class AgentConnectionController: ObservableObject {
         latestCompletedAssistantMessage = nil
 
         return assistantMessageID
+    }
+
+    @discardableResult
+    func beginAssistantTurn(userText: String) -> UUID {
+        beginAssistantTurn(userUtterance: TranscribedUtterance(text: userText))
     }
 
     func applyAgentEvent(_ event: AgentEvent) {

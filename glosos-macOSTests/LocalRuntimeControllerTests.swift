@@ -79,6 +79,7 @@ struct LocalRuntimeControllerTests {
         #expect(startInvocation?.configuration.modelName == "gemini-2.5-flash")
         #expect(startInvocation?.configuration.googleAPIKey == "secret")
         #expect(startInvocation?.assets == StubAssetManager.sampleAssets)
+        #expect(startInvocation?.reuseCachedFilesystem == true)
     }
 
     @Test
@@ -90,9 +91,10 @@ struct LocalRuntimeControllerTests {
 
         let assetManager = StubAssetManager(logs: "boot failed")
         let runtimeManager = StubRuntimeManager(
-            startResult: .success(
-                ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)
-            )
+            startResults: [
+                .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)),
+                .success(ManagedRuntimeEndpoint(host: "192.168.64.3", port: 8000)),
+            ]
         )
 
         let controller = LocalRuntimeController(
@@ -110,7 +112,71 @@ struct LocalRuntimeControllerTests {
         #expect(controller.runtimeState == .failed)
         #expect(controller.lastRuntimeError == "Container started, but the runtime endpoint never became ready.")
         #expect(controller.recentLogs == "boot failed")
+        #expect(stopCalls == ["glosos-google-user-macos", "glosos-google-user-macos", "glosos-google-user-macos"])
+    }
+
+    @Test
+    @MainActor
+    func managedRuntimeRetriesWithoutCachedFilesystemAfterCachedStartFailure() async throws {
+        let defaults = makeIsolatedDefaults()
+        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
+        defaults.set("secret", forKey: "managedGoogleAPIKey")
+
+        let runtimeManager = StubRuntimeManager(
+            startResults: [
+                .failure(RuntimePreparationError.failed("Cached filesystem failed")),
+                .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)),
+            ]
+        )
+
+        let controller = LocalRuntimeController(
+            userDefaults: defaults,
+            supportChecker: StubSupportChecker(status: .supported),
+            assetManager: StubAssetManager(),
+            runtimeManager: runtimeManager,
+            healthChecker: ImmediateHealthChecker(isHealthy: true)
+        )
+
+        let didStart = await controller.startRuntime()
+        let startInvocations = await runtimeManager.startInvocations
+        let stopCalls = await runtimeManager.stopCalls
+
+        #expect(didStart)
+        #expect(startInvocations.count == 2)
+        #expect(startInvocations.map(\.reuseCachedFilesystem) == [true, false])
         #expect(stopCalls == ["glosos-google-user-macos"])
+    }
+
+    @Test
+    @MainActor
+    func managedRuntimeRetriesWithoutCachedFilesystemAfterUnhealthyCachedStart() async throws {
+        let defaults = makeIsolatedDefaults()
+        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
+        defaults.set("secret", forKey: "managedGoogleAPIKey")
+
+        let runtimeManager = StubRuntimeManager(
+            startResults: [
+                .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)),
+                .success(ManagedRuntimeEndpoint(host: "192.168.64.3", port: 8000)),
+            ]
+        )
+
+        let controller = LocalRuntimeController(
+            userDefaults: defaults,
+            supportChecker: StubSupportChecker(status: .supported),
+            assetManager: StubAssetManager(logs: "boot failed"),
+            runtimeManager: runtimeManager,
+            healthChecker: SequencedHealthChecker(results: [false, true])
+        )
+
+        let didStart = await controller.startRuntime()
+        let startInvocations = await runtimeManager.startInvocations
+        let stopCalls = await runtimeManager.stopCalls
+
+        #expect(didStart)
+        #expect(controller.currentManagedEndpoint == ManagedRuntimeEndpoint(host: "192.168.64.3", port: 8000))
+        #expect(startInvocations.map(\.reuseCachedFilesystem) == [true, false])
+        #expect(stopCalls == ["glosos-google-user-macos", "glosos-google-user-macos"])
     }
 
     @Test
@@ -241,14 +307,22 @@ actor StubRuntimeManager: ContainerRuntimeManaging {
     struct StartInvocation {
         let configuration: ManagedContainerConfiguration
         let assets: ContainerRuntimeAssets
+        let reuseCachedFilesystem: Bool
     }
 
-    private let startResult: Result<ManagedRuntimeEndpoint, Error>
+    private var startResults: [Result<ManagedRuntimeEndpoint, Error>]
     private(set) var startInvocation: StartInvocation?
+    private(set) var startInvocations: [StartInvocation] = []
     private(set) var stopCalls: [String] = []
 
-    init(startResult: Result<ManagedRuntimeEndpoint, Error> = .failure(RuntimePreparationError.failed("Not started"))) {
-        self.startResult = startResult
+    init(
+        startResult: Result<ManagedRuntimeEndpoint, Error> = .failure(RuntimePreparationError.failed("Not started"))
+    ) {
+        self.startResults = [startResult]
+    }
+
+    init(startResults: [Result<ManagedRuntimeEndpoint, Error>]) {
+        self.startResults = startResults
     }
 
     func currentEndpoint(containerName: String) async -> ManagedRuntimeEndpoint? {
@@ -259,11 +333,22 @@ actor StubRuntimeManager: ContainerRuntimeManaging {
     func start(
         configuration: ManagedContainerConfiguration,
         assets: ContainerRuntimeAssets,
+        reuseCachedFilesystem: Bool,
         updateStatus: @escaping @Sendable (String) async -> Void
     ) async throws -> ManagedRuntimeEndpoint {
-        startInvocation = StartInvocation(configuration: configuration, assets: assets)
+        let invocation = StartInvocation(
+            configuration: configuration,
+            assets: assets,
+            reuseCachedFilesystem: reuseCachedFilesystem
+        )
+        startInvocation = invocation
+        startInvocations.append(invocation)
         await updateStatus("Starting container...")
-        return try startResult.get()
+        guard !startResults.isEmpty else {
+            throw RuntimePreparationError.failed("Not started")
+        }
+
+        return try startResults.removeFirst().get()
     }
 
     func stop(
@@ -282,5 +367,23 @@ private struct ImmediateHealthChecker: LocalRuntimeHealthChecking {
         let _ = endpoint
         let _ = timeoutSeconds
         return isHealthy
+    }
+}
+
+actor SequencedHealthChecker: LocalRuntimeHealthChecking {
+    private var results: [Bool]
+
+    init(results: [Bool]) {
+        self.results = results
+    }
+
+    func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool {
+        let _ = endpoint
+        let _ = timeoutSeconds
+        guard !results.isEmpty else {
+            return false
+        }
+
+        return results.removeFirst()
     }
 }

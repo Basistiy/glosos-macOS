@@ -33,6 +33,42 @@ struct SpeechDetectionTests {
     }
 
     @Test
+    func segmentRecorderIncludesPrerollAtSpeechStart() throws {
+        var recorder = SpeechSegmentRecorder(sampleRate: 10, prerollDuration: 0.3)
+        recorder.append(samples: [0, 1, 2, 3], sampleRate: 10)
+
+        recorder.speechStarted()
+        recorder.append(samples: [4, 5], sampleRate: 10)
+        recorder.speechEnded()
+
+        let segment = recorder.dequeuePendingSegment()
+
+        #expect(segment?.samples == [1, 2, 3, 4, 5])
+    }
+
+    @Test
+    func segmentRecorderQueuesOneSegmentPerVadWindowInOrder() throws {
+        var recorder = SpeechSegmentRecorder(sampleRate: 10, prerollDuration: 0.0)
+
+        recorder.append(samples: [1, 2], sampleRate: 10)
+        recorder.speechStarted()
+        recorder.append(samples: [3], sampleRate: 10)
+        recorder.speechEnded()
+
+        recorder.append(samples: [4, 5], sampleRate: 10)
+        recorder.speechStarted()
+        recorder.append(samples: [6], sampleRate: 10)
+        recorder.speechEnded()
+
+        let firstSegment = recorder.dequeuePendingSegment()
+        let secondSegment = recorder.dequeuePendingSegment()
+
+        #expect(firstSegment?.samples == [3])
+        #expect(secondSegment?.samples == [6])
+        #expect(recorder.dequeuePendingSegment() == nil)
+    }
+
+    @Test
     func vadStateMachineIgnoresShortNoiseBurst() throws {
         var stateMachine = VADSpeechStateMachine()
         let now = Date().timeIntervalSinceReferenceDate
@@ -125,6 +161,7 @@ struct SpeechDetectionTests {
         #expect(earlyFinalize.finalizedText == nil)
         #expect(update.finalizedText == "hello there")
         #expect(update.shouldClearTranscript == true)
+        #expect(update.didFinalizeSpeechSegment == true)
     }
 
     @Test
@@ -186,6 +223,7 @@ struct SpeechDetectionTests {
 
         #expect(update.finalizedText == "What is in the database")
         #expect(update.shouldClearTranscript == true)
+        #expect(update.didFinalizeSpeechSegment == true)
     }
 
     @Test
@@ -213,6 +251,65 @@ struct SpeechDetectionTests {
 
         #expect(nextStartUpdate.finalizedText == "stop")
         #expect(nextStartUpdate.shouldInterruptPlayback == false)
+        #expect(nextStartUpdate.didFinalizeSpeechSegment == true)
+    }
+
+    @Test
+    func fallbackSpeechRecognitionDoesNotProduceVadAudioClip() throws {
+        var coordinator = SpeechTurnCoordinator()
+        let update = coordinator.recordTranscript(
+            "fallback only",
+            hasRecognizedContent: true,
+            usingVAD: false,
+            isFinal: true,
+            isPlaybackAudible: false
+        )
+        let utterance = update.finalizedText.map {
+            TranscribedUtterance(
+                text: $0,
+                audioClip: update.didFinalizeSpeechSegment
+                    ? UserAudioClip(
+                        fileURL: URL(fileURLWithPath: "/tmp/should-not-exist.wav"),
+                        duration: 0.5
+                    )
+                    : nil
+            )
+        }
+
+        #expect(update.didFinalizeSpeechSegment == false)
+        #expect(utterance?.audioClip == nil)
+    }
+
+    @Test
+    func previewPlaybackCoordinatorTogglesActiveClipState() throws {
+        var coordinator = AudioClipPreviewCoordinator()
+        let firstClipID = UUID()
+        let secondClipID = UUID()
+
+        let firstAction = coordinator.togglePlayback(for: firstClipID)
+        let secondAction = coordinator.togglePlayback(for: firstClipID)
+        let thirdAction = coordinator.togglePlayback(for: secondClipID)
+
+        #expect(firstAction == .start)
+        #expect(secondAction == .stop)
+        #expect(thirdAction == .start)
+        #expect(coordinator.activeClipID == secondClipID)
+    }
+
+    @Test
+    func userMessagesOnlyExposePlayableAudioClipState() throws {
+        let clip = UserAudioClip(
+            fileURL: URL(fileURLWithPath: "/tmp/clip.wav"),
+            duration: 0.5
+        )
+
+        let userMessage = ChatMessage(role: .user, text: "Hello", audioClip: clip)
+        let assistantMessage = ChatMessage(role: .assistant, text: "Hi", audioClip: clip)
+        let plainUserMessage = ChatMessage(role: .user, text: "Hello")
+
+        #expect(userMessage.hasPlayableAudioClip)
+        #expect(assistantMessage.hasPlayableAudioClip == false)
+        #expect(plainUserMessage.hasPlayableAudioClip == false)
     }
 
     private func matchesSpeechStarted(_ event: VADSpeechStateMachine.Event) -> Bool {
