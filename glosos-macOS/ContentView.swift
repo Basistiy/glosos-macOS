@@ -19,38 +19,30 @@ struct ContentView: View {
     @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        HStack(spacing: 0) {
+            mainContent
 
-            Divider()
-                .overlay(Color.black.opacity(0.06))
+            if isShowingSettings {
+                Divider()
+                    .overlay(Color.black.opacity(0.06))
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 14) {
-                        if agentController.messages.isEmpty {
-                            emptyState
-                        }
-
-                        ForEach(agentController.messages) { message in
-                            ChatBubbleRow(message: message, speechController: speechController)
-                        }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id("chat-bottom")
+                SettingsView(
+                    speechController: speechController,
+                    agentController: agentController,
+                    runtimeController: runtimeController,
+                    autoSpeakAgentReplies: $autoSpeakAgentReplies,
+                    connectAction: { Task { await connectUsingSelectedRuntime() } },
+                    startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
+                    stopRuntimeAction: { Task { await stopManagedRuntime() } },
+                    restartRuntimeAction: { Task { await restartManagedRuntime() } },
+                    closeAction: {
+                        saveSettings()
+                        isShowingSettings = false
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-                }
-                .background(chatBackground)
-                .task(id: chatScrollState) {
-                    await Task.yield()
-                    scrollToBottom(with: proxy)
-                }
+                )
+                .frame(width: 380)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-
-            liveTranscriptPanel
         }
         .background(
             LinearGradient(
@@ -59,17 +51,7 @@ struct ContentView: View {
                 endPoint: .bottomTrailing
             )
         )
-        .sheet(isPresented: $isShowingSettings) {
-            SettingsSheet(
-                agentController: agentController,
-                runtimeController: runtimeController,
-                autoSpeakAgentReplies: $autoSpeakAgentReplies,
-                connectAction: { Task { await connectUsingSelectedRuntime() } },
-                startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
-                stopRuntimeAction: { Task { await stopManagedRuntime() } },
-                restartRuntimeAction: { Task { await restartManagedRuntime() } }
-            )
-        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isShowingSettings)
         .task {
             await initializeIfNeeded()
         }
@@ -117,8 +99,45 @@ struct ContentView: View {
             agentController.appendSystemMessage(newValue, state: .error)
         }
         .onDisappear {
+            saveSettings()
             agentController.disconnect()
             speechController.stopContinuousListening()
+        }
+    }
+
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            header
+
+            Divider()
+                .overlay(Color.black.opacity(0.06))
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 14) {
+                        if agentController.messages.isEmpty {
+                            emptyState
+                        }
+
+                        ForEach(agentController.messages) { message in
+                            ChatBubbleRow(message: message, speechController: speechController)
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id("chat-bottom")
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
+                }
+                .background(chatBackground)
+                .task(id: chatScrollState) {
+                    await Task.yield()
+                    scrollToBottom(with: proxy)
+                }
+            }
+
+            liveTranscriptPanel
         }
     }
 
@@ -161,12 +180,20 @@ struct ContentView: View {
             .buttonStyle(.plain)
 
             Button {
-                isShowingSettings = true
+                if isShowingSettings {
+                    saveSettings()
+                }
+                isShowingSettings.toggle()
             } label: {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 38, height: 38)
-                    .background(.white.opacity(0.78))
+                    .background(
+                        isShowingSettings
+                            ? Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.92)
+                            : .white.opacity(0.78)
+                    )
+                    .foregroundStyle(isShowingSettings ? .white : Color.primary)
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
@@ -431,6 +458,12 @@ struct ContentView: View {
             }
         }
     }
+
+    private func saveSettings() {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        runtimeController.saveSettings()
+        agentController.saveSettings()
+    }
 }
 
 private struct ChatScrollState: Equatable {
@@ -565,7 +598,8 @@ private struct ChatBubbleRow: View {
     }
 }
 
-private struct SettingsSheet: View {
+private struct SettingsView: View {
+    @ObservedObject var speechController: SpeechController
     @ObservedObject var agentController: AgentConnectionController
     @ObservedObject var runtimeController: LocalRuntimeController
     @Binding var autoSpeakAgentReplies: Bool
@@ -573,10 +607,27 @@ private struct SettingsSheet: View {
     let startRuntimeAction: () -> Void
     let stopRuntimeAction: () -> Void
     let restartRuntimeAction: () -> Void
-    @Environment(\.dismiss) private var dismiss
+    let closeAction: () -> Void
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Settings")
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+
+                Spacer()
+
+                Button("Close") {
+                    closeAction()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+
+            Divider()
+
             Form {
                 Section("Runtime") {
                     Picker("Mode", selection: $runtimeController.runtimeMode) {
@@ -720,17 +771,23 @@ private struct SettingsSheet: View {
                 Section("Playback") {
                     Toggle("Speak assistant replies aloud", isOn: $autoSpeakAgentReplies)
                 }
-            }
-            .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") {
-                        dismiss()
+
+                Section("Speech") {
+                    Picker("Language", selection: $speechController.selectedLanguage) {
+                        ForEach(SpeechLanguage.allCases) { language in
+                            Text(language.title).tag(language)
+                        }
                     }
+
+                    Text("This setting changes both live speech recognition and synthesized voice playback.")
+                        .font(.system(.footnote, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
             }
+            .formStyle(.grouped)
         }
-        .frame(minWidth: 460, minHeight: 420)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.ultraThinMaterial)
         .onDisappear {
             NSApp.keyWindow?.makeFirstResponder(nil)
             runtimeController.saveSettings()

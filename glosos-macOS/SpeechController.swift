@@ -18,12 +18,23 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     @Published private(set) var finalizedUtterance: TranscribedUtterance?
     @Published private(set) var playbackInterruptionToken: UUID?
     @Published private(set) var activePreviewClipID: UUID?
+    @Published var selectedLanguage: SpeechLanguage {
+        didSet {
+            guard selectedLanguage != oldValue else {
+                return
+            }
+
+            userDefaults.set(selectedLanguage.rawValue, forKey: Self.selectedLanguageKey)
+            handleSelectedLanguageChange()
+        }
+    }
 
     private let playbackSynthesizer = AVSpeechSynthesizer()
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private let speechVoice = AVSpeechSynthesisVoice(language: "en-US")
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var speechVoice: AVSpeechSynthesisVoice?
     private let speechSegmentRecorder: LockedSpeechSegmentRecorder
     private let clipStorageDirectory: URL
+    private let userDefaults: UserDefaults
 
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -72,8 +83,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     private let recognitionCompletionTimeout: UInt64 = 1_500_000_000
     private let utteranceSilenceTimeout: UInt64 = 1_200_000_000
+    private static let selectedLanguageKey = "speechLanguage"
 
-    override init() {
+    init(userDefaults: UserDefaults = .standard) {
+        let selectedLanguage = Self.loadSavedLanguage(from: userDefaults)
+        self.userDefaults = userDefaults
+        self.selectedLanguage = selectedLanguage
+        self.speechRecognizer = Self.makeSpeechRecognizer(for: selectedLanguage)
+        self.speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
         speechSegmentRecorder = LockedSpeechSegmentRecorder(sampleRate: VoiceProcessingIO.captureSampleRate)
         clipStorageDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("glosos-mic-clips", isDirectory: true)
@@ -93,7 +110,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     var displayedLiveTranscript: String {
         switch liveTranscript {
-        case "Waiting for speech...", "Listening...", "Microphone permission is required.", "Microphone is muted.":
+        case "Waiting for speech...", "Listening...", "Microphone permission is required.", "Microphone is muted.", "Speech recognition is unavailable.":
             return ""
         default:
             return liveTranscript
@@ -186,6 +203,43 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         recognitionCompletionTask = nil
         stopUserAudioClipPlayback(resumeListening: false)
         stopListening(reason: "view disappeared", shouldLog: false)
+    }
+
+    private func handleSelectedLanguageChange() {
+        let shouldAttemptListeningAfterChange = shouldKeepListening && !isMicrophoneMuted
+        let hadActiveRecognitionSession = isListeningContinuously
+            || recognitionTask != nil
+            || recognitionRequest != nil
+            || isAwaitingRecognitionFinalResult
+
+        listenerRestartTask?.cancel()
+        listenerRestartTask = nil
+
+        if hadActiveRecognitionSession {
+            stopListening(reason: "speech language changed", shouldLog: true)
+        }
+
+        speechRecognizer = Self.makeSpeechRecognizer(for: selectedLanguage)
+        speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
+        applyPermissionState(
+            speechStatus: speechAuthorizationStatus,
+            microphoneStatus: microphoneAuthorizationStatus
+        )
+
+        guard shouldAttemptListeningAfterChange,
+              canListenForTranscription,
+              !isPreparingPlayback,
+              !isPlaybackAudible,
+              !isListeningContinuously else {
+            return
+        }
+
+        do {
+            try startRecognitionSession()
+        } catch {
+            log("Failed to restart transcription after changing language: \(error.localizedDescription)")
+            statusMessage = "Live transcription is unavailable right now."
+        }
     }
 
     private func beginPlayback(with text: String) {
@@ -582,13 +636,17 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         speechAuthorizationStatus = speechStatus
         microphoneAuthorizationStatus = microphoneStatus
 
+        let recognizerSupported = speechRecognizer != nil
         let recognizerAvailable = speechRecognizer?.isAvailable == true
 
         log("Speech auth: \(describe(speechStatus))")
         log("Microphone auth: \(describe(microphoneStatus))")
+        log("Selected speech language: \(selectedLanguage.localeIdentifier)")
+        log("Recognizer supported: \(recognizerSupported)")
         log("Recognizer available: \(recognizerAvailable)")
         canListenForTranscription = speechStatus == .authorized
             && microphoneStatus == .authorized
+            && recognizerSupported
             && recognizerAvailable
 
         if canListenForTranscription {
@@ -598,7 +656,17 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             return
         }
 
-        if [speechStatus].contains(where: { $0 == .denied || $0 == .restricted })
+        if !recognizerSupported {
+            statusMessage = "Speech recognition for \(selectedLanguage.title) is unavailable on this Mac."
+            if !isMicrophoneMuted {
+                liveTranscript = "Speech recognition is unavailable."
+            }
+            return
+        }
+
+        if speechStatus == .authorized, microphoneStatus == .authorized, !recognizerAvailable {
+            statusMessage = "Speech recognition for \(selectedLanguage.title) is unavailable right now."
+        } else if [speechStatus].contains(where: { $0 == .denied || $0 == .restricted })
             || [microphoneStatus].contains(where: { $0 == .denied || $0 == .restricted }) {
             statusMessage = "Enable Microphone and Speech Recognition in System Settings to use live transcription."
         } else {
@@ -876,6 +944,23 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     nonisolated private func log(_ message: String) {
         print("[VoiceStop] \(message)")
+    }
+
+    private static func loadSavedLanguage(from userDefaults: UserDefaults) -> SpeechLanguage {
+        guard let rawValue = userDefaults.string(forKey: selectedLanguageKey),
+              let language = SpeechLanguage(rawValue: rawValue) else {
+            return .defaultValue
+        }
+
+        return language
+    }
+
+    private static func makeSpeechRecognizer(for language: SpeechLanguage) -> SFSpeechRecognizer? {
+        SFSpeechRecognizer(locale: Locale(identifier: language.localeIdentifier))
+    }
+
+    private static func makeSpeechVoice(for language: SpeechLanguage) -> AVSpeechSynthesisVoice? {
+        AVSpeechSynthesisVoice(language: language.localeIdentifier)
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
