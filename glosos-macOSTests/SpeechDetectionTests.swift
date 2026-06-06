@@ -227,6 +227,41 @@ struct SpeechDetectionTests {
     }
 
     @Test
+    func coordinatorUsesFinalTranscriptThatArrivesAfterVadEnd() throws {
+        var coordinator = SpeechTurnCoordinator()
+
+        _ = coordinator.recordTranscript(
+            "set a tim",
+            hasRecognizedContent: true,
+            usingVAD: true,
+            isFinal: false,
+            isPlaybackAudible: false
+        )
+        _ = coordinator.speechStarted(isPlaybackAudible: false, now: 12.0)
+        _ = coordinator.recordTranscript(
+            "set a tim",
+            hasRecognizedContent: true,
+            usingVAD: true,
+            isFinal: false,
+            isPlaybackAudible: false
+        )
+        _ = coordinator.speechEnded(now: 12.4)
+        _ = coordinator.recordTranscript(
+            "set a timer",
+            hasRecognizedContent: true,
+            usingVAD: true,
+            isFinal: true,
+            isPlaybackAudible: false
+        )
+
+        let update = coordinator.finalizePendingSpeechIfNeeded(now: 12.7, force: true)
+
+        #expect(update.finalizedText == "set a timer")
+        #expect(update.shouldClearTranscript == true)
+        #expect(update.didFinalizeSpeechSegment == true)
+    }
+
+    @Test
     func coordinatorFlushesPendingSegmentBeforeStartingNextOne() throws {
         var coordinator = SpeechTurnCoordinator()
 

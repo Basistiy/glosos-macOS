@@ -43,10 +43,8 @@ struct ContentView: View {
                     .padding(.vertical, 20)
                 }
                 .background(chatBackground)
-                .onChange(of: agentController.messages) { _, _ in
-                    scrollToBottom(with: proxy)
-                }
-                .onChange(of: speechController.displayedLiveTranscript) { _, _ in
+                .task(id: chatScrollState) {
+                    await Task.yield()
                     scrollToBottom(with: proxy)
                 }
             }
@@ -270,6 +268,14 @@ struct ContentView: View {
         }
     }
 
+    private var chatScrollState: ChatScrollState {
+        ChatScrollState(
+            lastMessageID: agentController.messages.last?.id,
+            lastMessageLength: agentController.messages.last?.text.count ?? 0,
+            transcript: speechController.displayedLiveTranscript
+        )
+    }
+
     private var microphoneStatusLabel: String {
         if speechController.isMicrophoneMuted {
             return "Microphone muted"
@@ -373,6 +379,12 @@ struct ContentView: View {
             }
         }
     }
+}
+
+private struct ChatScrollState: Equatable {
+    let lastMessageID: UUID?
+    let lastMessageLength: Int
+    let transcript: String
 }
 
 private struct ChatBubbleRow: View {

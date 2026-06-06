@@ -39,10 +39,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private var lastLoggedTranscript = ""
     private var shouldKeepListening = false
     private var listenerRestartTask: Task<Void, Never>?
-    private var vadSpeechEndTask: Task<Void, Never>?
+    private var recognitionCompletionTask: Task<Void, Never>?
+    private var isAwaitingRecognitionFinalResult = false
     private var speechTurnCoordinator = SpeechTurnCoordinator()
     private var previewPlaybackCoordinator = AudioClipPreviewCoordinator()
     private var shouldResumeListeningAfterPreviewPlayback = false
+
+    private let recognitionCompletionTimeout: UInt64 = 1_500_000_000
 
     override init() {
         speechSegmentRecorder = LockedSpeechSegmentRecorder(sampleRate: VoiceProcessingIO.captureSampleRate)
@@ -170,8 +173,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         shouldKeepListening = false
         listenerRestartTask?.cancel()
         listenerRestartTask = nil
-        vadSpeechEndTask?.cancel()
-        vadSpeechEndTask = nil
+        recognitionCompletionTask?.cancel()
+        recognitionCompletionTask = nil
         stopUserAudioClipPlayback(resumeListening: false)
         stopListening(reason: "view disappeared", shouldLog: false)
     }
@@ -216,8 +219,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         speechTurnCoordinator.reset()
-        vadSpeechEndTask?.cancel()
-        vadSpeechEndTask = nil
+        recognitionCompletionTask?.cancel()
+        recognitionCompletionTask = nil
+        isAwaitingRecognitionFinalResult = false
 
         let recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest.shouldReportPartialResults = true
@@ -248,25 +252,22 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self else { return }
 
-            let isFinal = result?.isFinal == true
-            if let transcript = result?.bestTranscription.formattedString, !transcript.isEmpty {
-                Task { @MainActor in
+            Task { @MainActor in
+                let isFinal = result?.isFinal == true
+
+                if let transcript = result?.bestTranscription.formattedString, !transcript.isEmpty {
                     self.handleTranscript(transcript, isFinal: isFinal)
                 }
-            }
 
-            if let error {
-                Task { @MainActor in
+                if let error {
                     self.handleRecognitionError(error)
                 }
-            }
 
-            if let result {
-                self.log("Recognition result received. isFinal=\(result.isFinal)")
-            }
+                if let result {
+                    self.log("Recognition result received. isFinal=\(result.isFinal)")
+                }
 
-            if error != nil || isFinal {
-                Task { @MainActor in
+                if error != nil || isFinal {
                     self.handleRecognitionSessionEnded(error: error, isFinal: isFinal)
                 }
             }
@@ -274,8 +275,27 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func handleRecognitionSessionEnded(error: Error?, isFinal: Bool) {
+        completeRecognitionSession(error: error, isFinal: isFinal, cancelOutstandingTask: false)
+    }
+
+    private func completeRecognitionSession(error: Error?, isFinal: Bool, cancelOutstandingTask: Bool) {
+        let hasActiveRecognition = isListeningContinuously || recognitionTask != nil || recognitionRequest != nil
+        guard hasActiveRecognition || isAwaitingRecognitionFinalResult else {
+            return
+        }
+
+        recognitionCompletionTask?.cancel()
+        recognitionCompletionTask = nil
+        isAwaitingRecognitionFinalResult = false
+
+        if let error {
+            log("Recognition session ended with error: \(error.localizedDescription)")
+        } else if isFinal {
+            log("Recognition session ended with a final result.")
+        }
+
         finalizePendingVADSpeechSegment(force: true)
-        stopListening(reason: "recognition completed", shouldLog: error == nil && isFinal)
+        tearDownRecognitionSession(cancelTask: cancelOutstandingTask)
 
         guard shouldActivelyListen else {
             return
@@ -351,7 +371,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func stopListening(reason: String, shouldLog: Bool = true) {
-        let hasActiveListener = isListeningContinuously || recognitionTask != nil || recognitionRequest != nil || voiceProcessingIO.isRunning
+        let hasActiveListener = isListeningContinuously || recognitionTask != nil || recognitionRequest != nil || voiceProcessingIO.isRunning || isAwaitingRecognitionFinalResult
         guard hasActiveListener, !isShuttingDownListener else {
             return
         }
@@ -362,26 +382,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             log("Stopping voice-stop listener. Reason: \(reason)")
         }
 
-        recognitionTask?.cancel()
-        recognitionTask = nil
-
-        recognitionRequest?.endAudio()
-        recognitionRequest = nil
-        voiceProcessingIO.setRecognitionRequest(nil)
-        voiceProcessingIO.setCapturedSamplesHandler(nil)
-        sileroVADProcessor.resetSession()
-        speechSegmentRecorder.reset()
-        vadSpeechEndTask?.cancel()
-        vadSpeechEndTask = nil
-        speechTurnCoordinator.reset()
-
-        if !isPlaybackAudible, !isPreparingPlayback {
-            voiceProcessingIO.stop()
-        }
-
-        isListeningContinuously = false
+        tearDownRecognitionSession(cancelTask: true)
         isShuttingDownListener = false
-        lastLoggedTranscript = ""
     }
 
     private func handleRecognitionError(_ error: Error) {
@@ -435,8 +437,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         isMicrophoneMuted = true
         listenerRestartTask?.cancel()
         listenerRestartTask = nil
-        vadSpeechEndTask?.cancel()
-        vadSpeechEndTask = nil
+        recognitionCompletionTask?.cancel()
+        recognitionCompletionTask = nil
         stopListening(reason: "microphone muted", shouldLog: true)
         voiceProcessingIO.stop()
         liveTranscript = "Microphone is muted."
@@ -637,8 +639,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     private func handleVADSpeechStarted() {
         speechSegmentRecorder.speechStarted()
-        vadSpeechEndTask?.cancel()
-        vadSpeechEndTask = nil
         let update = speechTurnCoordinator.speechStarted(
             isPlaybackAudible: isPlaybackAudible,
             now: Date().timeIntervalSinceReferenceDate
@@ -650,18 +650,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         speechSegmentRecorder.speechEnded()
         let update = speechTurnCoordinator.speechEnded(now: Date().timeIntervalSinceReferenceDate)
         applySpeechTurnUpdate(update, interruptionLogMessage: nil)
-
-        vadSpeechEndTask?.cancel()
-        vadSpeechEndTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            guard !Task.isCancelled else {
-                return
-            }
-
-            await MainActor.run {
-                self?.finalizePendingVADSpeechSegment()
-            }
-        }
+        endRecognitionRequestForCurrentUtterance()
     }
 
     private func finalizePendingVADSpeechSegment(force: Bool = false) {
@@ -670,6 +659,70 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             force: force
         )
         applySpeechTurnUpdate(update, interruptionLogMessage: nil)
+    }
+
+    private func endRecognitionRequestForCurrentUtterance() {
+        guard recognitionRequest != nil, recognitionTask != nil else {
+            finalizePendingVADSpeechSegment(force: true)
+            return
+        }
+
+        guard !isAwaitingRecognitionFinalResult else {
+            return
+        }
+
+        isAwaitingRecognitionFinalResult = true
+        recognitionCompletionTask?.cancel()
+        recognitionCompletionTask = nil
+        log("Ending recognition request and waiting for final result.")
+
+        voiceProcessingIO.setRecognitionRequest(nil)
+        voiceProcessingIO.setCapturedSamplesHandler(nil)
+        sileroVADProcessor.resetSession()
+        recognitionRequest?.endAudio()
+
+        let timeout = recognitionCompletionTimeout
+        recognitionCompletionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: timeout)
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await MainActor.run {
+                guard let self, self.isAwaitingRecognitionFinalResult else {
+                    return
+                }
+
+                self.log("Timed out waiting for final recognition result.")
+                self.completeRecognitionSession(error: nil, isFinal: false, cancelOutstandingTask: true)
+            }
+        }
+    }
+
+    private func tearDownRecognitionSession(cancelTask: Bool) {
+        recognitionCompletionTask?.cancel()
+        recognitionCompletionTask = nil
+        isAwaitingRecognitionFinalResult = false
+
+        if cancelTask {
+            recognitionTask?.cancel()
+            recognitionRequest?.endAudio()
+        }
+
+        recognitionTask = nil
+        recognitionRequest = nil
+        voiceProcessingIO.setRecognitionRequest(nil)
+        voiceProcessingIO.setCapturedSamplesHandler(nil)
+        sileroVADProcessor.resetSession()
+        speechSegmentRecorder.reset()
+        speechTurnCoordinator.reset()
+
+        if !isPlaybackAudible, !isPreparingPlayback {
+            voiceProcessingIO.stop()
+        }
+
+        isListeningContinuously = false
+        lastLoggedTranscript = ""
     }
 
     private func applySpeechTurnUpdate(_ update: SpeechTurnUpdate, interruptionLogMessage: String?) {
