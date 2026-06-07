@@ -27,7 +27,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
     private var inputScratchBuffer: UnsafeMutableRawPointer?
     private var inputScratchCapacity = 0
     private var lastInputRenderError: OSStatus?
-    private var isVoiceProcessingEnabled: Bool?
+    private var isVoiceProcessingEnabled = true
 
     init(logHandler: @escaping @Sendable (String) -> Void) {
         self.logHandler = logHandler
@@ -135,7 +135,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
                 ),
                 operation: "setting VoiceProcessingIO max frames"
             )
-            try setVoiceProcessingEnabled(false, for: audioUnit)
+            try setVoiceProcessingEnabled(isVoiceProcessingEnabled, for: audioUnit)
             try checkStatus(
                 AudioUnitSetProperty(
                     audioUnit,
@@ -393,7 +393,7 @@ final class VoiceProcessingIO: @unchecked Sendable {
         )
 
         isVoiceProcessingEnabled = isEnabled
-        logHandler(isEnabled ? "Voice processing enabled for playback interruption detection." : "Voice processing bypassed while idle.")
+        logHandler(isEnabled ? "Voice processing enabled." : "Voice processing bypassed.")
     }
 
     private func checkStatus(_ status: OSStatus, operation: String) throws {

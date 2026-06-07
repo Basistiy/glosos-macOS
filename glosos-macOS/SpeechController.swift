@@ -297,7 +297,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         log("Requires on-device recognition: \(recognitionRequest.requiresOnDeviceRecognition)")
 
         try voiceProcessingIO.startIfNeeded()
-        try voiceProcessingIO.setVoiceProcessingEnabled(false)
+        try voiceProcessingIO.setVoiceProcessingEnabled(true)
         voiceProcessingIO.setRecognitionRequest(recognitionRequest)
         let segmentRecorder = speechSegmentRecorder
         voiceProcessingIO.setCapturedSamplesHandler { [sileroVADProcessor, segmentRecorder] samples, sampleRate in
@@ -420,12 +420,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         if !isListeningContinuously {
             voiceProcessingIO.stop()
-        } else {
-            do {
-                try voiceProcessingIO.setVoiceProcessingEnabled(false)
-            } catch {
-                log("Could not bypass voice processing after playback: \(error.localizedDescription)")
-            }
         }
 
         if shouldActivelyListen {
