@@ -77,16 +77,21 @@ struct ContentView: View {
                     if autoSpeakAgentReplies, shouldSpeakAssistantReply {
                         speechController.play(newValue.text)
                     }
+                    
+                    // Forward LLM response to WebRTC peer if connected
+                    if p2pController.isConnected {
+                        _ = p2pController.sendMessage(newValue.text)
+                    }
+                    
                     sendPendingUtteranceIfPossible()
                 }
-                .onChange(of: p2pController.latestCompletedPeerMessage) { _, newValue in
+                .onChange(of: p2pController.latestReceivedPeerMessage) { _, newValue in
                     guard let newValue else {
                         return
                     }
                     
-                    if autoSpeakAgentReplies {
-                        speechController.play(newValue.text)
-                    }
+                    // Forward peer message to LLM agent
+                    agentController.sendUserMessage(newValue)
                 }
                 .onChange(of: authManager.token) { _, newToken in
                     if let newToken = newToken {
@@ -141,7 +146,7 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        let messagesToShow = (authManager.token != nil) ? p2pController.messages : agentController.messages
+                        let messagesToShow = agentController.messages
                         
                         if messagesToShow.isEmpty {
                             emptyState
@@ -212,17 +217,32 @@ struct ContentView: View {
             }
 
             Label {
-                Text(authManager.token != nil ? p2pController.statusDetail : agentController.statusDetail)
+                Text(agentController.statusDetail)
                     .font(.system(.subheadline, design: .rounded))
             } icon: {
                 Circle()
-                    .fill((authManager.token != nil ? p2pController.isConnected : agentController.isConnected) ? Color(red: 0.16, green: 0.57, blue: 0.43) : Color(red: 0.78, green: 0.38, blue: 0.28))
+                    .fill(agentController.isConnected ? Color(red: 0.16, green: 0.57, blue: 0.43) : Color(red: 0.78, green: 0.38, blue: 0.28))
                     .frame(width: 10, height: 10)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             .background(.white.opacity(0.72))
             .clipShape(Capsule())
+
+            if authManager.token != nil {
+                Label {
+                    Text(p2pController.isConnected ? "Peer connected" : p2pController.statusDetail)
+                        .font(.system(.subheadline, design: .rounded))
+                } icon: {
+                    Circle()
+                        .fill(p2pController.isConnected ? Color(red: 0.22, green: 0.48, blue: 0.72) : Color(red: 0.78, green: 0.38, blue: 0.28))
+                        .frame(width: 10, height: 10)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(.white.opacity(0.72))
+                .clipShape(Capsule())
+            }
 
             Button {
                 openManagedUserFolder()
@@ -505,15 +525,14 @@ struct ContentView: View {
     }
 
     private func enqueueOrSend(_ utterance: TranscribedUtterance) {
-        if authManager.token != nil {
-            _ = p2pController.sendMessage(utterance.text)
-        } else {
-            if let utteranceToSend = pendingUtteranceCoordinator.register(
-                utterance,
-                whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
-            ) {
-                _ = agentController.sendUserMessage(utteranceToSend)
-            }
+        // Always route speech to the LLM agent. When a WebRTC peer is
+        // connected, the LLM response will be forwarded to the peer
+        // automatically via the .onChange handler.
+        if let utteranceToSend = pendingUtteranceCoordinator.register(
+            utterance,
+            whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
+        ) {
+            _ = agentController.sendUserMessage(utteranceToSend)
         }
     }
 

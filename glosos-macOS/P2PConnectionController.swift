@@ -15,6 +15,7 @@ final class P2PConnectionController: ObservableObject {
     private(set) var statusDetail = "Disconnected"
     var messages: [ChatMessage] = []
     var latestCompletedPeerMessage: ChatMessage?
+    @Published var latestReceivedPeerMessage: String?
     
     private var signalingClient: SignalingClient?
     private let webRTCManager: WebRTCManager
@@ -227,9 +228,8 @@ extension P2PConnectionController: WebRTCManagerDelegate {
     
     public func webRTCManager(_ manager: WebRTCManager, didReceiveMessage message: String) {
         print("[P2PConnectionController] Message received over Data Channel: \(message)")
-        let chatMsg = ChatMessage(role: .assistant, text: message, state: .final)
-        messages.append(chatMsg)
-        latestCompletedPeerMessage = chatMsg
+        // Publish the raw text so ContentView can forward it to the LLM agent
+        latestReceivedPeerMessage = message
     }
     
     public func webRTCManager(_ manager: WebRTCManager, didChangeDataChannelState isOpen: Bool) {
