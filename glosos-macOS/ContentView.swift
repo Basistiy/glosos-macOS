@@ -9,6 +9,7 @@ import AppKit
 import SwiftUI
 
 struct ContentView: View {
+    @ObservedObject var authManager: AuthManager
     @StateObject private var speechController = SpeechController()
     @StateObject private var agentController = AgentConnectionController()
     @StateObject private var runtimeController = LocalRuntimeController()
@@ -19,89 +20,95 @@ struct ContentView: View {
     @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
 
     var body: some View {
-        HStack(spacing: 0) {
-            mainContent
+        Group {
+            if authManager.token == nil && !authManager.isOfflineMode {
+                AuthView(authManager: authManager)
+            } else {
+                HStack(spacing: 0) {
+                    mainContent
 
-            if isShowingSettings {
-                Divider()
-                    .overlay(Color.black.opacity(0.06))
+                    if isShowingSettings {
+                        Divider()
+                            .overlay(Color.black.opacity(0.06))
 
-                SettingsView(
-                    speechController: speechController,
-                    agentController: agentController,
-                    runtimeController: runtimeController,
-                    autoSpeakAgentReplies: $autoSpeakAgentReplies,
-                    connectAction: { Task { await connectUsingSelectedRuntime() } },
-                    startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
-                    stopRuntimeAction: { Task { await stopManagedRuntime() } },
-                    restartRuntimeAction: { Task { await restartManagedRuntime() } },
-                    closeAction: {
-                        saveSettings()
-                        isShowingSettings = false
+                        SettingsView(
+                            speechController: speechController,
+                            agentController: agentController,
+                            runtimeController: runtimeController,
+                            autoSpeakAgentReplies: $autoSpeakAgentReplies,
+                            connectAction: { Task { await connectUsingSelectedRuntime() } },
+                            startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
+                            stopRuntimeAction: { Task { await stopManagedRuntime() } },
+                            restartRuntimeAction: { Task { await restartManagedRuntime() } },
+                            closeAction: {
+                                saveSettings()
+                                isShowingSettings = false
+                            }
+                        )
+                        .frame(width: 380)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
+                }
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
-                .frame(width: 380)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .background(
-            LinearGradient(
-                colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isShowingSettings)
-        .task {
-            await initializeIfNeeded()
-        }
-        .onChange(of: speechController.finalizedUtterance) { _, newValue in
-            guard let newValue else {
-                return
-            }
+                .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isShowingSettings)
+                .task {
+                    await initializeIfNeeded()
+                }
+                .onChange(of: speechController.finalizedUtterance) { _, newValue in
+                    guard let newValue else {
+                        return
+                    }
 
-            enqueueOrSend(newValue)
-        }
-        .onChange(of: agentController.latestCompletedAssistantMessage) { _, newValue in
-            guard let newValue else {
-                return
-            }
+                    enqueueOrSend(newValue)
+                }
+                .onChange(of: agentController.latestCompletedAssistantMessage) { _, newValue in
+                    guard let newValue else {
+                        return
+                    }
 
-            let shouldSpeakAssistantReply = assistantPlaybackCoordinator.consumeCompletion(for: newValue)
-            if autoSpeakAgentReplies, shouldSpeakAssistantReply {
-                speechController.play(newValue.text)
-            }
-            sendPendingUtteranceIfPossible()
-        }
-        .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
-            sendPendingUtteranceIfPossible()
-        }
-        .onChange(of: speechController.playbackInterruptionToken) { _, newValue in
-            if newValue != nil {
-                assistantPlaybackCoordinator.suppress(messageID: agentController.activeAssistantTurnID)
-            }
-        }
-        .onChange(of: runtimeController.runtimeMode) { _, _ in
-            guard hasInitialized else {
-                return
-            }
+                    let shouldSpeakAssistantReply = assistantPlaybackCoordinator.consumeCompletion(for: newValue)
+                    if autoSpeakAgentReplies, shouldSpeakAssistantReply {
+                        speechController.play(newValue.text)
+                    }
+                    sendPendingUtteranceIfPossible()
+                }
+                .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
+                    sendPendingUtteranceIfPossible()
+                }
+                .onChange(of: speechController.playbackInterruptionToken) { _, newValue in
+                    if newValue != nil {
+                        assistantPlaybackCoordinator.suppress(messageID: agentController.activeAssistantTurnID)
+                    }
+                }
+                .onChange(of: runtimeController.runtimeMode) { _, _ in
+                    guard hasInitialized else {
+                        return
+                    }
 
-            agentController.disconnect()
-            Task {
-                await runtimeController.refreshStatus()
-            }
-        }
-        .onChange(of: runtimeController.lastRuntimeError) { _, newValue in
-            guard let newValue else {
-                return
-            }
+                    agentController.disconnect()
+                    Task {
+                        await runtimeController.refreshStatus()
+                    }
+                }
+                .onChange(of: runtimeController.lastRuntimeError) { _, newValue in
+                    guard let newValue else {
+                        return
+                    }
 
-            agentController.appendSystemMessage(newValue, state: .error)
-        }
-        .onDisappear {
-            saveSettings()
-            agentController.disconnect()
-            speechController.stopContinuousListening()
+                    agentController.appendSystemMessage(newValue, state: .error)
+                }
+                .onDisappear {
+                    saveSettings()
+                    agentController.disconnect()
+                    speechController.stopContinuousListening()
+                }
+            }
         }
     }
 
@@ -155,6 +162,34 @@ struct ContentView: View {
 
             Spacer()
 
+            if let user = authManager.user {
+                Label {
+                    Text(user.username)
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                } icon: {
+                    Circle()
+                        .fill(Color(red: 0.18, green: 0.52, blue: 0.42))
+                        .frame(width: 8, height: 8)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.white.opacity(0.72))
+                .clipShape(Capsule())
+            } else if authManager.isOfflineMode {
+                Label {
+                    Text("Offline Mode")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                } icon: {
+                    Circle()
+                        .fill(Color(red: 0.78, green: 0.38, blue: 0.28))
+                        .frame(width: 8, height: 8)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.white.opacity(0.72))
+                .clipShape(Capsule())
+            }
+
             Label {
                 Text(agentController.statusDetail)
                     .font(.system(.subheadline, design: .rounded))
@@ -194,6 +229,18 @@ struct ContentView: View {
                             : .white.opacity(0.78)
                     )
                     .foregroundStyle(isShowingSettings ? .white : Color.primary)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                authManager.logout()
+            } label: {
+                Image(systemName: authManager.isOfflineMode ? "person.crop.circle.badge.plus" : "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.78))
+                    .foregroundStyle(authManager.isOfflineMode ? Color(red: 0.18, green: 0.52, blue: 0.42) : Color(red: 0.70, green: 0.28, blue: 0.23))
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)
@@ -813,5 +860,5 @@ private struct SettingsView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(authManager: AuthManager())
 }

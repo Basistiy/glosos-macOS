@@ -9,9 +9,11 @@ import SwiftUI
 
 @main
 struct glosos_macOSApp: App {
+    @StateObject private var authManager = AuthManager()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(authManager: authManager)
         }
     }
 }
