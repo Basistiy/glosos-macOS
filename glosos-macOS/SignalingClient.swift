@@ -39,7 +39,10 @@ public final class SignalingClient: NSObject {
             
             guard let webSocketURL = Self.makeWebSocketURL(from: self.apiEndpoint) else {
                 let error = NSError(domain: "SignalingClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid apiEndpoint for WebSocket URL formulation"])
-                self.delegate?.signalingClient(self, didFailWithError: error)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.delegate?.signalingClient(self, didFailWithError: error)
+                }
                 return
             }
             
@@ -75,7 +78,10 @@ public final class SignalingClient: NSObject {
             self.urlSession?.invalidateAndCancel()
             self.urlSession = nil
             self.isConnected = false
-            self.delegate?.signalingClientDidDisconnect(self)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.delegate?.signalingClientDidDisconnect(self)
+            }
         }
     }
     

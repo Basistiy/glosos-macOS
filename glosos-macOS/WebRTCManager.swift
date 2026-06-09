@@ -22,6 +22,16 @@ public final class WebRTCManager: NSObject {
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
     
+    private var localAudioTrack: RTCAudioTrack?
+    private var playerNode: AVAudioPlayerNode?
+    private var mixerNode: AVAudioMixerNode?
+    
+    private var activeBuffersCount = 0
+    private let bufferLock = NSLock()
+    private var onPlaybackFinished: (() -> Void)?
+    
+    public var onIncomingAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
+    
     private static let stunServers = [
         "stun:stun.l.google.com:19302",
         "stun:stun1.l.google.com:19302",
@@ -30,7 +40,13 @@ public final class WebRTCManager: NSObject {
     
     public override init() {
         RTCInitializeSSL()
-        self.peerConnectionFactory = RTCPeerConnectionFactory()
+        self.peerConnectionFactory = RTCPeerConnectionFactory(
+            audioDeviceModuleType: .audioEngine,
+            bypassVoiceProcessing: false,
+            encoderFactory: nil,
+            decoderFactory: nil,
+            audioProcessingModule: nil
+        )
         super.init()
     }
     
@@ -54,14 +70,24 @@ public final class WebRTCManager: NSObject {
         }
         
         self.peerConnection = pc
-        print("[WebRTCManager] RTCPeerConnection created successfully.")
+        
+        // Configure ADM observer
+        peerConnectionFactory.audioDeviceModule.observer = self
+        
+        // Add local audio track
+        let audioSource = peerConnectionFactory.audioSource(with: nil)
+        let audioTrack = peerConnectionFactory.audioTrack(with: audioSource, trackId: "audio0")
+        pc.add(audioTrack, streamIds: ["stream0"])
+        self.localAudioTrack = audioTrack
+        
+        print("[WebRTCManager] RTCPeerConnection created successfully with local audio track.")
         return true
     }
     
     public func handleIncomingCall(offerSdp: String, completion: @escaping (Result<RTCSessionDescription, Error>) -> Void) {
         guard let pc = peerConnection else {
             let error = NSError(domain: "WebRTCManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "PeerConnection is not initialized"])
-            completion(.failure(error))
+            DispatchQueue.main.async { completion(.failure(error)) }
             return
         }
         
@@ -70,7 +96,7 @@ public final class WebRTCManager: NSObject {
         pc.setRemoteDescription(remoteDescription) { [weak self] error in
             if let error = error {
                 print("[WebRTCManager] SetRemoteDescription (Offer) failed: \(error.localizedDescription)")
-                completion(.failure(error))
+                DispatchQueue.main.async { completion(.failure(error)) }
                 return
             }
             
@@ -82,25 +108,25 @@ public final class WebRTCManager: NSObject {
                 
                 if let error = error {
                     print("[WebRTCManager] CreateAnswer failed: \(error.localizedDescription)")
-                    completion(.failure(error))
+                    DispatchQueue.main.async { completion(.failure(error)) }
                     return
                 }
                 
                 guard let localSdp = localSdp else {
                     let error = NSError(domain: "WebRTCManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "Created Answer was nil"])
-                    completion(.failure(error))
+                    DispatchQueue.main.async { completion(.failure(error)) }
                     return
                 }
                 
                 pc.setLocalDescription(localSdp) { error in
                     if let error = error {
                         print("[WebRTCManager] SetLocalDescription (Answer) failed: \(error.localizedDescription)")
-                        completion(.failure(error))
+                        DispatchQueue.main.async { completion(.failure(error)) }
                         return
                     }
                     
                     print("[WebRTCManager] SetLocalDescription (Answer) succeeded. Sending answer...")
-                    completion(.success(localSdp))
+                    DispatchQueue.main.async { completion(.success(localSdp)) }
                 }
             }
         }
@@ -144,6 +170,60 @@ public final class WebRTCManager: NSObject {
             pc.close()
             peerConnection = nil
         }
+        localAudioTrack = nil
+        playerNode = nil
+        mixerNode = nil
+        
+        bufferLock.lock()
+        activeBuffersCount = 0
+        onPlaybackFinished = nil
+        onIncomingAudioBuffer = nil
+        bufferLock.unlock()
+    }
+    
+    public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
+        guard let player = playerNode, !buffers.isEmpty else {
+            completion()
+            return
+        }
+        
+        bufferLock.lock()
+        activeBuffersCount = buffers.count
+        onPlaybackFinished = completion
+        bufferLock.unlock()
+        
+        if !player.isPlaying {
+            player.play()
+        }
+        
+        for buffer in buffers {
+            player.scheduleBuffer(buffer) { [weak self] in
+                guard let self = self else { return }
+                self.bufferLock.lock()
+                self.activeBuffersCount -= 1
+                let count = self.activeBuffersCount
+                let callback = self.onPlaybackFinished
+                if count == 0 {
+                    self.onPlaybackFinished = nil
+                }
+                self.bufferLock.unlock()
+                
+                if count == 0 {
+                    DispatchQueue.main.async {
+                        callback?()
+                    }
+                }
+            }
+        }
+    }
+    
+    public func stopAudioPlayback() {
+        print("[WebRTCManager] Stopping audio player node.")
+        playerNode?.stop()
+        bufferLock.lock()
+        activeBuffersCount = 0
+        onPlaybackFinished = nil
+        bufferLock.unlock()
     }
 }
 
@@ -227,5 +307,87 @@ extension WebRTCManager: RTCDataChannelDelegate {
             guard let self = self else { return }
             self.delegate?.webRTCManager(self, didReceiveMessage: message)
         }
+    }
+}
+
+// MARK: - RTCAudioDeviceModuleDelegate
+
+extension WebRTCManager: RTCAudioDeviceModuleDelegate {
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didReceiveSpeechActivityEvent speechActivityEvent: RTCSpeechActivityEvent) {
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didCreateEngine engine: AVAudioEngine) -> Int {
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willEnableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willStartEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didStopEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didDisableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willReleaseEngine engine: AVAudioEngine) -> Int {
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureInputFromSource source: AVAudioNode?, toDestination destination: AVAudioNode, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
+        print("[WebRTCManager] configureInputFromSource called. Format: \(format)")
+        
+        // Break any default connections WebRTC might have made for input
+        if let src = source {
+            engine.disconnectNodeOutput(src)
+        }
+        engine.disconnectNodeInput(destination)
+        
+        let player = AVAudioPlayerNode()
+        let mixer = AVAudioMixerNode()
+        
+        engine.attach(player)
+        engine.attach(mixer)
+        
+        // Connect the player to the mixer using format
+        engine.connect(player, to: mixer, format: format)
+        
+        // Connect the mixer to WebRTC's input destination
+        engine.connect(mixer, to: destination, format: format)
+        
+        self.playerNode = player
+        self.mixerNode = mixer
+        
+        return 0
+    }
+    
+    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureOutputFromSource source: AVAudioNode, toDestination destination: AVAudioNode?, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
+        print("[WebRTCManager] configureOutputFromSource called. Format: \(format)")
+        
+        // Break default connections to prevent playout to speakers
+        engine.disconnectNodeOutput(source)
+        if let dest = destination {
+            engine.disconnectNodeInput(dest)
+        }
+        
+        source.removeTap(onBus: 0)
+        source.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] (buffer, time) in
+            guard let self = self else { return }
+            self.onIncomingAudioBuffer?(buffer)
+        }
+        
+        return 0
+    }
+    
+    public func audioDeviceModuleDidUpdateDevices(_ audioDeviceModule: RTCAudioDeviceModule) {
+    }
+    
+    public func audioDeviceModule(_ module: RTCAudioDeviceModule, didUpdateAudioProcessingState state: RTCAudioProcessingState) {
     }
 }

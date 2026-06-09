@@ -29,6 +29,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    @Published var isWebRTCConnected = false {
+        didSet {
+            playbackSynthesizer.delegate = isWebRTCConnected ? nil : self
+        }
+    }
+    var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
+    var onStopPlayback: (() -> Void)?
+
     private let playbackSynthesizer = AVSpeechSynthesizer()
     private var speechRecognizer: SFSpeechRecognizer?
     private var speechVoice: AVSpeechSynthesisVoice?
@@ -205,6 +213,24 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         stopListening(reason: "view disappeared", shouldLog: false)
     }
 
+    func feedExternalAudio(_ buffer: AVAudioPCMBuffer) {
+        guard isListeningContinuously, !isMicrophoneMuted else {
+            return
+        }
+        
+        guard let floatData = buffer.floatChannelData?[0] else {
+            return
+        }
+        
+        let frameCount = Int(buffer.frameLength)
+        let sampleRate = Int(buffer.format.sampleRate)
+        let samples = Array(UnsafeBufferPointer(start: floatData, count: frameCount))
+        
+        speechSegmentRecorder.append(samples: samples, sampleRate: sampleRate)
+        sileroVADProcessor.append(samples: samples, sampleRate: sampleRate)
+        recognitionRequest?.append(buffer)
+    }
+
     private func handleSelectedLanguageChange() {
         let shouldAttemptListeningAfterChange = shouldKeepListening && !isMicrophoneMuted
         let hadActiveRecognitionSession = isListeningContinuously
@@ -264,14 +290,57 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             log("Could not enable voice processing before playback: \(error.localizedDescription)")
         }
 
-        isPreparingPlayback = false
-        isPlaybackAudible = true
-        isSpeaking = true
-        statusMessage = shouldActivelyListen
-            ? "Playback is active. Any spoken word will interrupt it."
-            : "Playing synthesized audio."
-        log("Starting speech synthesis.")
-        playbackSynthesizer.speak(utterance)
+        if isWebRTCConnected {
+            isPreparingPlayback = false
+            isPlaybackAudible = true
+            isSpeaking = true
+            statusMessage = shouldActivelyListen
+                ? "Playback is active. Any spoken word will interrupt it."
+                : "Playing synthesized audio."
+            log("Starting speech synthesis to WebRTC buffer.")
+            
+            Task.detached(priority: .userInitiated) { [weak self] in
+                guard let self = self else { return }
+                
+                var pcmBuffers: [AVAudioPCMBuffer] = []
+                let voice = await self.speechVoice
+                
+                let runUtterance = AVSpeechUtterance(string: text)
+                runUtterance.voice = voice
+                runUtterance.rate = AVSpeechUtteranceDefaultSpeechRate
+                
+                await self.playbackSynthesizer.write(runUtterance) { (buffer: AVAudioBuffer) in
+                    if let pcmBuffer = buffer as? AVAudioPCMBuffer, pcmBuffer.frameLength > 0 {
+                        pcmBuffers.append(pcmBuffer)
+                    }
+                }
+                
+                await MainActor.run { [weak self] in
+                    guard let self = self else { return }
+                    guard self.isSpeaking else { return }
+                    
+                    if let onSynthesizedBuffers = self.onSynthesizedBuffers {
+                        onSynthesizedBuffers(pcmBuffers) { [weak self] in
+                            guard let self = self else { return }
+                            guard self.isSpeaking else { return }
+                            self.log("Speech synthesis playback via WebRTC finished.")
+                            self.finishPlayback(wasInterrupted: false)
+                        }
+                    } else {
+                        self.finishPlayback(wasInterrupted: false)
+                    }
+                }
+            }
+        } else {
+            isPreparingPlayback = false
+            isPlaybackAudible = true
+            isSpeaking = true
+            statusMessage = shouldActivelyListen
+                ? "Playback is active. Any spoken word will interrupt it."
+                : "Playing synthesized audio."
+            log("Starting speech synthesis.")
+            playbackSynthesizer.speak(utterance)
+        }
     }
 
     private func startRecognitionSession() throws {
@@ -408,8 +477,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         if !sileroVADProcessor.isReady, shouldKeepListening, isListeningContinuously {
             stopListening(reason: "refreshing recognition after interruption", shouldLog: false)
         }
-        if !playbackSynthesizer.stopSpeaking(at: .immediate) {
+        
+        if isWebRTCConnected {
+            onStopPlayback?()
             finishPlayback(wasInterrupted: true)
+        } else {
+            if !playbackSynthesizer.stopSpeaking(at: .immediate) {
+                finishPlayback(wasInterrupted: true)
+            }
         }
     }
 
@@ -958,7 +1033,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        guard synthesizer === playbackSynthesizer else {
+        guard synthesizer === playbackSynthesizer, !isWebRTCConnected else {
             return
         }
 
@@ -966,7 +1041,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        guard synthesizer === playbackSynthesizer else {
+        guard synthesizer === playbackSynthesizer, !isWebRTCConnected else {
             return
         }
 
@@ -975,7 +1050,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        guard synthesizer === playbackSynthesizer else {
+        guard synthesizer === playbackSynthesizer, !isWebRTCConnected else {
             return
         }
 

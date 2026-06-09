@@ -101,6 +101,9 @@ struct ContentView: View {
                         p2pController.clearMessages()
                     }
                 }
+                .onChange(of: p2pController.isConnected) { _, isConnected in
+                    speechController.isWebRTCConnected = isConnected
+                }
                 .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
                     sendPendingUtteranceIfPossible()
                 }
@@ -471,6 +474,23 @@ struct ContentView: View {
         }
 
         hasInitialized = true
+        
+        // Setup WebRTC audio callbacks
+        speechController.onSynthesizedBuffers = { [weak p2pController] buffers, completion in
+            p2pController?.playAudioBuffers(buffers, completion: completion)
+        }
+        speechController.onStopPlayback = { [weak p2pController] in
+            p2pController?.stopAudioPlayback()
+        }
+        speechController.isWebRTCConnected = p2pController.isConnected
+        
+        // Setup incoming WebRTC audio transcription callback
+        p2pController.onIncomingAudioBuffer = { [weak speechController] buffer in
+            Task { @MainActor in
+                speechController?.feedExternalAudio(buffer)
+            }
+        }
+        
         speechController.refreshPermissionState()
         if speechController.isReadyForLiveTranscription {
             await speechController.startContinuousListening()

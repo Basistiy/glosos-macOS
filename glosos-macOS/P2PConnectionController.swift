@@ -11,11 +11,17 @@ import WebRTC
 
 @MainActor
 final class P2PConnectionController: ObservableObject {
-    private(set) var isConnected = false
-    private(set) var statusDetail = "Disconnected"
+    @Published private(set) var isConnected = false
+    @Published private(set) var statusDetail = "Disconnected"
     var messages: [ChatMessage] = []
     var latestCompletedPeerMessage: ChatMessage?
     @Published var latestReceivedPeerMessage: String?
+    
+    var onIncomingAudioBuffer: ((AVAudioPCMBuffer) -> Void)? {
+        didSet {
+            webRTCManager.onIncomingAudioBuffer = onIncomingAudioBuffer
+        }
+    }
     
     private var signalingClient: SignalingClient?
     private let webRTCManager: WebRTCManager
@@ -80,6 +86,14 @@ final class P2PConnectionController: ObservableObject {
     func clearMessages() {
         messages.removeAll()
         latestCompletedPeerMessage = nil
+    }
+    
+    func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
+        webRTCManager.playAudioBuffers(buffers, completion: completion)
+    }
+    
+    func stopAudioPlayback() {
+        webRTCManager.stopAudioPlayback()
     }
     
     // MARK: - Private Call Cleanup
