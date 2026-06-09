@@ -13,6 +13,7 @@ struct ContentView: View {
     @StateObject private var speechController = SpeechController()
     @StateObject private var agentController = AgentConnectionController()
     @StateObject private var runtimeController = LocalRuntimeController()
+    @StateObject private var p2pController = P2PConnectionController()
     @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
     @State private var isShowingSettings = false
     @State private var hasInitialized = false
@@ -78,6 +79,23 @@ struct ContentView: View {
                     }
                     sendPendingUtteranceIfPossible()
                 }
+                .onChange(of: p2pController.latestCompletedPeerMessage) { _, newValue in
+                    guard let newValue else {
+                        return
+                    }
+                    
+                    if autoSpeakAgentReplies {
+                        speechController.play(newValue.text)
+                    }
+                }
+                .onChange(of: authManager.token) { _, newToken in
+                    if let newToken = newToken {
+                        p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: newToken)
+                    } else {
+                        p2pController.disconnect()
+                        p2pController.clearMessages()
+                    }
+                }
                 .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
                     sendPendingUtteranceIfPossible()
                 }
@@ -106,6 +124,7 @@ struct ContentView: View {
                 .onDisappear {
                     saveSettings()
                     agentController.disconnect()
+                    p2pController.disconnect()
                     speechController.stopContinuousListening()
                 }
             }
@@ -122,11 +141,13 @@ struct ContentView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        if agentController.messages.isEmpty {
+                        let messagesToShow = (authManager.token != nil) ? p2pController.messages : agentController.messages
+                        
+                        if messagesToShow.isEmpty {
                             emptyState
                         }
 
-                        ForEach(agentController.messages) { message in
+                        ForEach(messagesToShow) { message in
                             ChatBubbleRow(message: message, speechController: speechController)
                         }
 
@@ -191,11 +212,11 @@ struct ContentView: View {
             }
 
             Label {
-                Text(agentController.statusDetail)
+                Text(authManager.token != nil ? p2pController.statusDetail : agentController.statusDetail)
                     .font(.system(.subheadline, design: .rounded))
             } icon: {
                 Circle()
-                    .fill(agentController.isConnected ? Color(red: 0.16, green: 0.57, blue: 0.43) : Color(red: 0.78, green: 0.38, blue: 0.28))
+                    .fill((authManager.token != nil ? p2pController.isConnected : agentController.isConnected) ? Color(red: 0.16, green: 0.57, blue: 0.43) : Color(red: 0.78, green: 0.38, blue: 0.28))
                     .frame(width: 10, height: 10)
             }
             .padding(.horizontal, 14)
@@ -436,6 +457,10 @@ struct ContentView: View {
         }
         await runtimeController.refreshStatus()
         await connectUsingSelectedRuntime()
+        
+        if let token = authManager.token {
+            p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: token)
+        }
     }
 
     private func connectUsingSelectedRuntime() async {
@@ -480,11 +505,15 @@ struct ContentView: View {
     }
 
     private func enqueueOrSend(_ utterance: TranscribedUtterance) {
-        if let utteranceToSend = pendingUtteranceCoordinator.register(
-            utterance,
-            whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
-        ) {
-            _ = agentController.sendUserMessage(utteranceToSend)
+        if authManager.token != nil {
+            _ = p2pController.sendMessage(utterance.text)
+        } else {
+            if let utteranceToSend = pendingUtteranceCoordinator.register(
+                utterance,
+                whileAwaitingAssistantResponse: agentController.isAwaitingAssistantResponse
+            ) {
+                _ = agentController.sendUserMessage(utteranceToSend)
+            }
         }
     }
 
