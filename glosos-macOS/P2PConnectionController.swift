@@ -96,6 +96,14 @@ final class P2PConnectionController: ObservableObject {
         webRTCManager.stopAudioPlayback()
     }
     
+    func playAudioFile(at url: URL, completion: @escaping () -> Void) {
+        webRTCManager.playAudioFile(at: url, completion: completion)
+    }
+    
+    func setMicrophoneMuted(_ isMuted: Bool) {
+        webRTCManager.isMicrophoneMuted = isMuted
+    }
+    
     // MARK: - Private Call Cleanup
     
     private func cleanupCall() {

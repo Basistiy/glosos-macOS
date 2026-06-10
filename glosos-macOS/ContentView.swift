@@ -97,6 +97,12 @@ struct ContentView: View {
                 }
                 .onChange(of: p2pController.isConnected) { _, isConnected in
                     speechController.isWebRTCConnected = isConnected
+                    if isConnected {
+                        p2pController.setMicrophoneMuted(speechController.isMicrophoneMuted)
+                    }
+                }
+                .onChange(of: speechController.isMicrophoneMuted) { _, isMuted in
+                    p2pController.setMicrophoneMuted(isMuted)
                 }
                 .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
                     sendPendingUtteranceIfPossible()
@@ -476,8 +482,9 @@ struct ContentView: View {
         hasInitialized = true
         
         // Setup WebRTC audio callbacks
-        speechController.onSynthesizedBuffers = { [weak p2pController] buffers, completion in
-            p2pController?.playAudioBuffers(buffers, completion: completion)
+        speechController.agentResponsesDirectoryURL = runtimeController.managedUserFolderURL
+        speechController.onSynthesizedFile = { [weak p2pController] fileURL, completion in
+            p2pController?.playAudioFile(at: fileURL, completion: completion)
         }
         speechController.onStopPlayback = { [weak p2pController] in
             p2pController?.stopAudioPlayback()
@@ -491,6 +498,7 @@ struct ContentView: View {
             }
         }
         
+        await speechController.preparePermissions()
         speechController.refreshPermissionState()
         if speechController.isReadyForLiveTranscription {
             await speechController.startContinuousListening()
@@ -501,6 +509,9 @@ struct ContentView: View {
         if let token = authManager.token {
             p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: token)
         }
+        
+        // Sync initial mute state
+        p2pController.setMicrophoneMuted(speechController.isMicrophoneMuted)
     }
 
     private func connectUsingSelectedRuntime() async {

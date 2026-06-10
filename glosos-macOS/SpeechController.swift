@@ -35,7 +35,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
     var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
+    var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
     var onStopPlayback: (() -> Void)?
+    
+    var agentResponsesDirectoryURL: URL?
 
     private let playbackSynthesizer = AVSpeechSynthesizer()
     private var speechVoice: AVSpeechSynthesisVoice?
@@ -108,6 +111,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     func preparePermissions() async {
+        _ = await withCheckedContinuation { continuation in
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+
         _ = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status)
@@ -224,40 +233,182 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
 
         if isWebRTCConnected {
+            let destinationDir = agentResponsesDirectoryURL ?? FileManager.default.temporaryDirectory
+            let fileURL = destinationDir.appendingPathComponent("agent_response_\(UUID().uuidString).wav")
+            
             isPreparingPlayback = false
             isPlaybackAudible = true
             isSpeaking = true
             statusMessage = "Playing synthesized audio."
-            log("Starting speech synthesis to WebRTC buffer.")
+            log("Starting speech synthesis to WebRTC audio file.")
             
             Task.detached(priority: .userInitiated) { [weak self] in
-                guard let self = self else { return }
+                guard let self = self else {
+                    print("[SpeechController] [Error] Self is nil in synthesis task")
+                    return
+                }
                 
-                var pcmBuffers: [AVAudioPCMBuffer] = []
+                print("[SpeechController] Starting background synthesis task for text: '\(text)'")
                 let voice = await self.speechVoice
                 
                 let runUtterance = AVSpeechUtterance(string: text)
                 runUtterance.voice = voice
                 runUtterance.rate = AVSpeechUtteranceDefaultSpeechRate
                 
-                await self.playbackSynthesizer.write(runUtterance) { (buffer: AVAudioBuffer) in
-                    if let pcmBuffer = buffer as? AVAudioPCMBuffer, pcmBuffer.frameLength > 0 {
-                        pcmBuffers.append(pcmBuffer)
+                try? FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+                
+                // We will use a continuation to suspend this task until the callbacks finish.
+                let synthesisSuccess = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    class SynthesisState {
+                        var audioFile: AVAudioFile? = nil
+                        var converter: AVAudioConverter? = nil
+                        var bufferCount = 0
+                        var writeFailed = false
+                        var continuationFinished = false
+                    }
+                    
+                    let state = SynthesisState()
+                    let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
+                    
+                    print("[SpeechController] Invoking playbackSynthesizer.write...")
+                    self.playbackSynthesizer.write(runUtterance) { (buffer: AVAudioBuffer) in
+                        guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
+                            print("[SpeechController] [Warning] Received non-PCM buffer")
+                            return
+                        }
+                        
+                        if pcmBuffer.frameLength == 0 {
+                            print("[SpeechController] Synthesis callback: frameLength is 0 (end of stream)")
+                            state.audioFile = nil // Close the file
+                            if !state.continuationFinished {
+                                state.continuationFinished = true
+                                continuation.resume(returning: !state.writeFailed)
+                            }
+                            return
+                        }
+                        
+                        state.bufferCount += 1
+                        
+                        if state.writeFailed {
+                            return
+                        }
+                        
+                        // Instantiate converter when the first buffer is received
+                        if state.converter == nil {
+                            state.converter = AVAudioConverter(from: pcmBuffer.format, to: targetFormat)
+                            if state.converter == nil {
+                                print("[SpeechController] [Error] Failed to create AVAudioConverter from \(pcmBuffer.format) to \(targetFormat)")
+                                state.writeFailed = true
+                                state.audioFile = nil
+                                if !state.continuationFinished {
+                                    state.continuationFinished = true
+                                    continuation.resume(returning: false)
+                                }
+                                return
+                            }
+                        }
+                        
+                        guard let conv = state.converter else { return }
+                        
+                        // Perform sample rate conversion
+                        let sampleRateRatio = targetFormat.sampleRate / pcmBuffer.format.sampleRate
+                        let outputFrameCapacity = AVAudioFrameCount(Double(pcmBuffer.frameLength) * sampleRateRatio) + 16
+                        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outputFrameCapacity) else {
+                            print("[SpeechController] [Error] Failed to allocate output buffer for resampling")
+                            state.writeFailed = true
+                            state.audioFile = nil
+                            if !state.continuationFinished {
+                                state.continuationFinished = true
+                                continuation.resume(returning: false)
+                            }
+                            return
+                        }
+                        
+                        var error: NSError? = nil
+                        var inputConsumed = false
+                        let status = conv.convert(to: outputBuffer, error: &error) { inNumPackets, outStatus in
+                            if inputConsumed {
+                                outStatus.pointee = .noDataNow
+                                return nil
+                            }
+                            outStatus.pointee = .haveData
+                            inputConsumed = true
+                            return pcmBuffer
+                        }
+                        
+                        if status == .error || error != nil {
+                            print("[SpeechController] [Error] AVAudioConverter convert failed: \(error?.localizedDescription ?? "unknown error")")
+                            state.writeFailed = true
+                            state.audioFile = nil
+                            if !state.continuationFinished {
+                                state.continuationFinished = true
+                                continuation.resume(returning: false)
+                            }
+                            return
+                        }
+                        
+                        if outputBuffer.frameLength > 0 {
+                            do {
+                                if state.audioFile == nil {
+                                    print("[SpeechController] Initializing AVAudioFile with target format settings: \(targetFormat.settings)")
+                                    state.audioFile = try AVAudioFile(
+                                        forWriting: fileURL,
+                                        settings: targetFormat.settings,
+                                        commonFormat: targetFormat.commonFormat,
+                                        interleaved: targetFormat.isInterleaved
+                                    )
+                                }
+                                try state.audioFile?.write(from: outputBuffer)
+                            } catch {
+                                print("[SpeechController] Failed to write resampled buffer #\(state.bufferCount) to file: \(error.localizedDescription)")
+                                state.writeFailed = true
+                                state.audioFile = nil
+                                if !state.continuationFinished {
+                                    state.continuationFinished = true
+                                    continuation.resume(returning: false)
+                                }
+                            }
+                        }
                     }
                 }
                 
+                print("[SpeechController] AVSpeechSynthesizer.write callbacks finished. synthesisSuccess: \(synthesisSuccess)")
+                
+                let pathStr = fileURL.path(percentEncoded: false)
+                let fileExists = FileManager.default.fileExists(atPath: pathStr)
+                var fileSize: UInt64 = 0
+                if fileExists {
+                    fileSize = (try? FileManager.default.attributesOfItem(atPath: pathStr)[.size] as? UInt64) ?? 0
+                }
+                print("[SpeechController] File check: path='\(pathStr)', exists=\(fileExists), size=\(fileSize) bytes")
+                
                 await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-                    guard self.isSpeaking else { return }
+                    guard let self = self else {
+                        print("[SpeechController] [Error] Self became nil in MainActor completion")
+                        return
+                    }
+                    print("[SpeechController] MainActor completion block: isSpeaking=\(self.isSpeaking)")
+                    guard self.isSpeaking else {
+                        print("[SpeechController] [Warning] isSpeaking is false, aborting playback")
+                        return
+                    }
                     
-                    if let onSynthesizedBuffers = self.onSynthesizedBuffers {
-                        onSynthesizedBuffers(pcmBuffers) { [weak self] in
-                            guard let self = self else { return }
-                            guard self.isSpeaking else { return }
-                            self.log("Speech synthesis playback via WebRTC finished.")
+                    if synthesisSuccess && fileExists && fileSize > 0 {
+                        self.log("Speech synthesis written successfully to file: \(pathStr). Initiating WebRTC playback...")
+                        
+                        if let onSynthesizedFile = self.onSynthesizedFile {
+                            onSynthesizedFile(fileURL) { [weak self] in
+                                guard let self = self else { return }
+                                guard self.isSpeaking else { return }
+                                self.log("Speech synthesis playback via WebRTC finished.")
+                                self.finishPlayback(wasInterrupted: false)
+                            }
+                        } else {
+                            print("[SpeechController] [Warning] onSynthesizedFile callback is nil")
                             self.finishPlayback(wasInterrupted: false)
                         }
                     } else {
+                        print("[SpeechController] [Error] File writing failed, file does not exist, or size is 0")
                         self.finishPlayback(wasInterrupted: false)
                     }
                 }

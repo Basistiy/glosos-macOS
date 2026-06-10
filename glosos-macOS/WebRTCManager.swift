@@ -32,6 +32,13 @@ public final class WebRTCManager: NSObject {
     
     public var onIncomingAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
     
+    public var isMicrophoneMuted: Bool = false {
+        didSet {
+            localAudioTrack?.isEnabled = !isMicrophoneMuted
+            print("[WebRTCManager] Microphone mute state changed to: \(isMicrophoneMuted), track isEnabled: \(localAudioTrack?.isEnabled ?? false)")
+        }
+    }
+    
     private static let stunServers = [
         "stun:stun.l.google.com:19302",
         "stun:stun1.l.google.com:19302",
@@ -77,6 +84,7 @@ public final class WebRTCManager: NSObject {
         // Add local audio track
         let audioSource = peerConnectionFactory.audioSource(with: nil)
         let audioTrack = peerConnectionFactory.audioTrack(with: audioSource, trackId: "audio0")
+        audioTrack.isEnabled = !isMicrophoneMuted
         pc.add(audioTrack, streamIds: ["stream0"])
         self.localAudioTrack = audioTrack
         
@@ -181,9 +189,15 @@ public final class WebRTCManager: NSObject {
     }
     
     public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
-        guard let player = playerNode, !buffers.isEmpty else {
+        guard let player = playerNode, let mixer = mixerNode, let engine = player.engine, !buffers.isEmpty else {
             completion()
             return
+        }
+        
+        if let firstBuffer = buffers.first {
+            engine.disconnectNodeOutput(player)
+            engine.connect(player, to: mixer, format: firstBuffer.format)
+            print("[WebRTCManager] Playing audio buffers with format: \(firstBuffer.format) (reconnected player to mixer)")
         }
         
         bufferLock.lock()
@@ -213,6 +227,45 @@ public final class WebRTCManager: NSObject {
                     }
                 }
             }
+        }
+    }
+    
+    public func playAudioFile(at url: URL, completion: @escaping () -> Void) {
+        guard let player = playerNode, let engine = player.engine else {
+            print("[WebRTCManager] [Warning] playAudioFile called but playerNode or engine is nil")
+            completion()
+            return
+        }
+        
+        do {
+            let file = try AVAudioFile(forReading: url)
+            
+            print("[WebRTCManager] Playing resampled audio file with format: \(file.processingFormat)")
+            
+            bufferLock.lock()
+            activeBuffersCount = 1
+            onPlaybackFinished = completion
+            bufferLock.unlock()
+            
+            if !player.isPlaying {
+                player.play()
+            }
+            
+            player.scheduleFile(file, at: nil) { [weak self] in
+                guard let self = self else { return }
+                self.bufferLock.lock()
+                self.activeBuffersCount = 0
+                let callback = self.onPlaybackFinished
+                self.onPlaybackFinished = nil
+                self.bufferLock.unlock()
+                
+                DispatchQueue.main.async {
+                    callback?()
+                }
+            }
+        } catch {
+            print("[WebRTCManager] Failed to read audio file for playback: \(error.localizedDescription)")
+            completion()
         }
     }
     
@@ -364,6 +417,12 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
         
         // Connect the player to the mixer using format
         engine.connect(player, to: mixer, format: format)
+        
+        // Connect the physical microphone (source) to the mixer using WebRTC's mono format
+        if let src = source {
+            print("[WebRTCManager] Connecting input source with WebRTC format: \(format)")
+            engine.connect(src, to: mixer, format: format)
+        }
         
         // Connect the mixer to WebRTC's input destination
         engine.connect(mixer, to: destination, format: format)
