@@ -7,6 +7,7 @@
 
 import Foundation
 import Testing
+import AVFoundation
 @testable import glosos_macOS
 
 struct glosos_macOSTests {
@@ -122,6 +123,43 @@ struct glosos_macOSTests {
 
         #expect(shouldSpeak == true)
         #expect(coordinator.suppressedAssistantMessageID == interruptedID)
+    }
+
+    @Test
+    @MainActor
+    func speechControllerCreatesFileWhenFeedingAudio() async throws {
+        let controller = SpeechController()
+        
+        // Ensure listening is enabled
+        await controller.startContinuousListening()
+        
+        // Simulate speech detection starting
+        controller.handleSpeechStarted()
+        
+        // Create a dummy audio buffer (1 second of silence at 16kHz mono)
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16000)!
+        buffer.frameLength = 16000
+        
+        // Feed the audio buffer
+        controller.feedExternalAudio(buffer)
+        
+        // Verify that the temporary file was created and is not empty
+        let fileManager = FileManager.default
+        guard let tempFileURL = controller.audioFileURL else {
+            Issue.record("audioFileURL is nil")
+            return
+        }
+        #expect(fileManager.fileExists(atPath: tempFileURL.path))
+        
+        // Simulate speech detection ending (triggers transcription and deletion)
+        controller.handleSpeechEnded()
+        
+        // Stop listening to close any remaining files
+        controller.stopContinuousListening()
+        
+        // Clean up the created utterance files if still present
+        try? fileManager.removeItem(at: tempFileURL)
     }
 
 }

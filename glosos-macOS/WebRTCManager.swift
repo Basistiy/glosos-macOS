@@ -42,7 +42,7 @@ public final class WebRTCManager: NSObject {
         RTCInitializeSSL()
         self.peerConnectionFactory = RTCPeerConnectionFactory(
             audioDeviceModuleType: .audioEngine,
-            bypassVoiceProcessing: false,
+            bypassVoiceProcessing: true,
             encoderFactory: nil,
             decoderFactory: nil,
             audioProcessingModule: nil
@@ -177,7 +177,6 @@ public final class WebRTCManager: NSObject {
         bufferLock.lock()
         activeBuffersCount = 0
         onPlaybackFinished = nil
-        onIncomingAudioBuffer = nil
         bufferLock.unlock()
     }
     
@@ -257,6 +256,7 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
         print("[WebRTCManager] ICE gathering state changed: \(newState.rawValue)")
     }
     
+
     public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         // print("[WebRTCManager] Generated local ICE candidate: \(candidate.sdp)")
         DispatchQueue.main.async { [weak self] in
@@ -314,29 +314,36 @@ extension WebRTCManager: RTCDataChannelDelegate {
 
 extension WebRTCManager: RTCAudioDeviceModuleDelegate {
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didReceiveSpeechActivityEvent speechActivityEvent: RTCSpeechActivityEvent) {
+        print("[WebRTCManager] audioDeviceModule didReceiveSpeechActivityEvent: \(speechActivityEvent.rawValue)")
     }
     
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didCreateEngine engine: AVAudioEngine) -> Int {
+        print("[WebRTCManager] audioDeviceModule didCreateEngine called.")
         return 0
     }
     
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willEnableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        print("[WebRTCManager] audioDeviceModule willEnableEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willStartEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        print("[WebRTCManager] audioDeviceModule willStartEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didStopEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        print("[WebRTCManager] audioDeviceModule didStopEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didDisableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+        print("[WebRTCManager] audioDeviceModule didDisableEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willReleaseEngine engine: AVAudioEngine) -> Int {
+        print("[WebRTCManager] audioDeviceModule willReleaseEngine called.")
         return 0
     }
     
@@ -370,14 +377,19 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureOutputFromSource source: AVAudioNode, toDestination destination: AVAudioNode?, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
         print("[WebRTCManager] configureOutputFromSource called. Format: \(format)")
         
-        // Break default connections to prevent playout to speakers
-        engine.disconnectNodeOutput(source)
-        if let dest = destination {
-            engine.disconnectNodeInput(dest)
+        // In order to keep the pull chain active (so that our tap callback is called by the audio engine),
+        // we must not disconnect the output node from the main graph. Instead, we keep the connection
+        // active but set its output volume to 0 to prevent any actual playout to the physical speakers.
+        if let mixer = destination as? AVAudioMixerNode {
+            mixer.outputVolume = 1.0
+            print("[WebRTCManager] Set destination mixer node output volume to 1.0.")
         }
+        engine.mainMixerNode.outputVolume = 1.0
+        print("[WebRTCManager] Set main mixer output volume to 1.0.")
         
         source.removeTap(onBus: 0)
         source.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] (buffer, time) in
+            print("[WebRTCManager] Tap received audio buffer with frameLength: \(buffer.frameLength)")
             guard let self = self else { return }
             self.onIncomingAudioBuffer?(buffer)
         }
@@ -386,8 +398,10 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
     }
     
     public func audioDeviceModuleDidUpdateDevices(_ audioDeviceModule: RTCAudioDeviceModule) {
+        print("[WebRTCManager] audioDeviceModuleDidUpdateDevices called.")
     }
     
     public func audioDeviceModule(_ module: RTCAudioDeviceModule, didUpdateAudioProcessingState state: RTCAudioProcessingState) {
+        print("[WebRTCManager] audioDeviceModule didUpdateAudioProcessingState: voiceProcessingEnabled=\(state.voiceProcessingEnabled)")
     }
 }

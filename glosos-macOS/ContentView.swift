@@ -61,13 +61,7 @@ struct ContentView: View {
                 .task {
                     await initializeIfNeeded()
                 }
-                .onChange(of: speechController.finalizedUtterance) { _, newValue in
-                    guard let newValue else {
-                        return
-                    }
 
-                    enqueueOrSend(newValue)
-                }
                 .onChange(of: agentController.latestCompletedAssistantMessage) { _, newValue in
                     guard let newValue else {
                         return
@@ -111,6 +105,12 @@ struct ContentView: View {
                     if newValue != nil {
                         assistantPlaybackCoordinator.suppress(messageID: agentController.activeAssistantTurnID)
                     }
+                }
+                .onChange(of: speechController.finalizedUtterance) { _, newValue in
+                    guard let newValue = newValue else {
+                        return
+                    }
+                    enqueueOrSend(newValue)
                 }
                 .onChange(of: runtimeController.runtimeMode) { _, _ in
                     guard hasInitialized else {
@@ -296,11 +296,11 @@ struct ContentView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Text("Start speaking to begin")
+            Text("Waiting for connection")
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .foregroundStyle(Color(red: 0.18, green: 0.22, blue: 0.19))
 
-            Text("Your speech becomes chat bubbles automatically when the utterance ends.")
+            Text("Connect from a WebRTC peer and start speaking. The app will stream and transcribe audio automatically.")
                 .font(.system(.body, design: .rounded))
                 .foregroundStyle(Color.black.opacity(0.5))
                 .multilineTextAlignment(.center)
@@ -339,11 +339,11 @@ struct ContentView: View {
                 } label: {
                     Label(
                         speechController.isReadyForLiveTranscription
-                            ? (speechController.isMicrophoneMuted ? "Unmute" : "Mute")
-                            : "Enable Mic",
+                            ? (speechController.isMicrophoneMuted ? "Resume" : "Pause")
+                            : "Enable Recording",
                         systemImage: speechController.isReadyForLiveTranscription
-                            ? (speechController.isMicrophoneMuted ? "mic.fill" : "mic.slash.fill")
-                            : "mic.badge.plus"
+                            ? (speechController.isMicrophoneMuted ? "play.circle.fill" : "pause.circle.fill")
+                            : "waveform.badge.plus"
                     )
                     .font(.system(.caption, design: .rounded).weight(.semibold))
                     .foregroundStyle(
@@ -391,8 +391,8 @@ struct ContentView: View {
 
         if speechController.isMicrophoneMuted {
             return agentController.isAwaitingAssistantResponse
-                ? "Microphone is muted. Assistant playback will continue without spoken interruptions until you unmute."
-                : "Microphone is muted. Unmute when you want to speak to the agent again."
+                ? "Transcription is paused. Assistant playback will continue without spoken interruptions."
+                : "Transcription is paused. Resume when you want to transcribe WebRTC audio again."
         }
 
         let transcript = speechController.displayedLiveTranscript
@@ -401,8 +401,8 @@ struct ContentView: View {
         }
 
         return agentController.isAwaitingAssistantResponse
-            ? "Speak at any time to interrupt voice playback. The newest finished utterance will send after the current reply completes."
-            : "Speak naturally. The app sends each finished utterance automatically."
+            ? "Incoming WebRTC audio will interrupt playback."
+            : "Stream incoming WebRTC audio to transcribe."
     }
 
     private var chatBackground: some View {
@@ -430,18 +430,18 @@ struct ContentView: View {
 
     private var microphoneStatusLabel: String {
         if speechController.isMicrophoneMuted {
-            return "Microphone muted"
+            return "Transcription paused"
         }
 
-        return speechController.isCapturingSpeech ? "Listening now" : "Microphone ready"
+        return speechController.isCapturingSpeech ? "Transcribing speech..." : "Transcription ready"
     }
 
     private var microphoneStatusIcon: String {
         if speechController.isMicrophoneMuted {
-            return "mic.slash.fill"
+            return "pause.fill"
         }
 
-        return speechController.isCapturingSpeech ? "waveform.badge.mic" : "mic.fill"
+        return speechController.isCapturingSpeech ? "waveform.badge.mic" : "waveform"
     }
 
     private var microphoneStatusColor: Color {
@@ -626,28 +626,7 @@ private struct ChatBubbleRow: View {
                 .foregroundStyle(textColor)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let audioClip = message.audioClip, message.hasPlayableAudioClip {
-                Button {
-                    speechController.toggleUserAudioClipPlayback(audioClip)
-                } label: {
-                    Label(
-                        speechController.activePreviewClipID == audioClip.id
-                            ? "Stop clip"
-                            : "Play clip \(formattedDuration(audioClip.duration))",
-                        systemImage: speechController.activePreviewClipID == audioClip.id
-                            ? "stop.fill"
-                            : "play.fill"
-                    )
-                    .font(.system(.caption, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.14))
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
-            }
+
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
