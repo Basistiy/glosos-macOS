@@ -53,6 +53,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     private var audioFile: AVAudioFile?
     var audioFileURL: URL?
+    private var currentPlayingFileURL: URL?
     private static let selectedLanguageKey = "speechLanguage"
 
     private var vadProcessor: SileroVADProcessor?
@@ -225,6 +226,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func beginPlayback(with text: String) {
+        if let oldURL = currentPlayingFileURL {
+            try? FileManager.default.removeItem(at: oldURL)
+            currentPlayingFileURL = nil
+        }
+        
         isPreparingPlayback = true
         statusMessage = "Preparing synthesized playback..."
 
@@ -395,21 +401,41 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     
                     if synthesisSuccess && fileExists && fileSize > 0 {
                         self.log("Speech synthesis written successfully to file: \(pathStr). Initiating WebRTC playback...")
+                        self.currentPlayingFileURL = fileURL
                         
                         if let onSynthesizedFile = self.onSynthesizedFile {
                             onSynthesizedFile(fileURL) { [weak self] in
-                                guard let self = self else { return }
-                                guard self.isSpeaking else { return }
+                                guard let self = self else {
+                                    try? FileManager.default.removeItem(at: fileURL)
+                                    return
+                                }
+                                guard self.isSpeaking else {
+                                    if self.currentPlayingFileURL == fileURL {
+                                        self.currentPlayingFileURL = nil
+                                    }
+                                    try? FileManager.default.removeItem(at: fileURL)
+                                    return
+                                }
                                 self.log("Speech synthesis playback via WebRTC finished.")
+                                if self.currentPlayingFileURL == fileURL {
+                                    self.currentPlayingFileURL = nil
+                                }
                                 self.finishPlayback(wasInterrupted: false)
+                                try? FileManager.default.removeItem(at: fileURL)
+                                print("[SpeechController] Deleted synthesized audio file: \(pathStr)")
                             }
                         } else {
                             print("[SpeechController] [Warning] onSynthesizedFile callback is nil")
+                            if self.currentPlayingFileURL == fileURL {
+                                self.currentPlayingFileURL = nil
+                            }
                             self.finishPlayback(wasInterrupted: false)
+                            try? FileManager.default.removeItem(at: fileURL)
                         }
                     } else {
                         print("[SpeechController] [Error] File writing failed, file does not exist, or size is 0")
                         self.finishPlayback(wasInterrupted: false)
+                        try? FileManager.default.removeItem(at: fileURL)
                     }
                 }
             }
@@ -521,12 +547,24 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    deinit {
+        if let fileURL = currentPlayingFileURL {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+    }
+
     private func stopPlayback() {
         guard isPreparingPlayback || isSpeaking || isPlaybackAudible else {
             return
         }
 
         log("Stopping playback.")
+        
+        if let fileURL = currentPlayingFileURL {
+            try? FileManager.default.removeItem(at: fileURL)
+            currentPlayingFileURL = nil
+            print("[SpeechController] Deleted current playing file: \(fileURL.path)")
+        }
         
         if isWebRTCConnected {
             onStopPlayback?()
