@@ -162,6 +162,56 @@ struct glosos_macOSTests {
         try? fileManager.removeItem(at: tempFileURL)
     }
 
+    @Test
+    @MainActor
+    func abortActiveTurnCancelsTaskAndLeavesControllerConnected() async throws {
+        let transport = RecordingAgentTransport()
+        let controller = AgentConnectionController(transport: transport)
+        
+        // Setup initial connected state
+        await controller.connect(using: "http://127.0.0.1:18000")
+        #expect(controller.isConnected)
+        
+        // Start a turn
+        _ = controller.beginAssistantTurn(userText: "Interrupt me")
+        #expect(controller.isAwaitingAssistantResponse)
+        
+        // Abort the turn (simulating user speaking barge-in)
+        controller.abortActiveTurn()
+        
+        #expect(controller.isConnected) // Should still be connected
+        #expect(controller.isAwaitingAssistantResponse == false)
+        #expect(controller.messages.last?.state == .error)
+        #expect(controller.messages.last?.text.contains("Interrupted") == true)
+    }
+
+    @Test
+    func pendingUtteranceCanBeCleared() async throws {
+        var coordinator = PendingUtteranceCoordinator()
+        let utterance = TranscribedUtterance(text: "Stale")
+        
+        _ = coordinator.register(utterance, whileAwaitingAssistantResponse: true)
+        #expect(coordinator.pendingUtterance == utterance)
+        
+        coordinator.clear()
+        #expect(coordinator.pendingUtterance == nil)
+    }
+
+    @Test
+    @MainActor
+    func stopPlaybackCancelsActivePlaybackToken() async throws {
+        let controller = SpeechController()
+        
+        // We will trigger a fake playback setup
+        controller.play("Test speech synthesis")
+        
+        // Now call stopPlayback
+        controller.stopPlayback()
+        
+        // Verify isSpeaking has been reset
+        #expect(controller.isSpeaking == false)
+    }
+
 }
 
 final class RecordingAgentTransport: AgentTransport {

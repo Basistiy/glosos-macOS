@@ -37,6 +37,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
     var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
     var onStopPlayback: (() -> Void)?
+    var onSpeechStarted: (() -> Void)?
+    private var currentPlaybackToken: PlaybackToken?
     
     var agentResponsesDirectoryURL: URL?
 
@@ -198,6 +200,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         log("Speech started detected by VAD.")
         liveTranscript = "Listening..."
         
+        stopPlayback()
+        onSpeechStarted?()
+        
         if !prerollBuffers.isEmpty {
             let format = prerollBuffers[0].format
             do {
@@ -231,6 +236,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             currentPlayingFileURL = nil
         }
         
+        currentPlaybackToken?.isCancelled = true
+        currentPlaybackToken = nil
+        
         isPreparingPlayback = true
         statusMessage = "Preparing synthesized playback..."
 
@@ -247,6 +255,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             isSpeaking = true
             statusMessage = "Playing synthesized audio."
             log("Starting speech synthesis to WebRTC audio file.")
+            
+            let playbackToken = PlaybackToken()
+            self.currentPlaybackToken = playbackToken
             
             Task.detached(priority: .userInitiated) { [weak self] in
                 guard let self = self else {
@@ -278,6 +289,16 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     
                     print("[SpeechController] Invoking playbackSynthesizer.write...")
                     self.playbackSynthesizer.write(runUtterance) { (buffer: AVAudioBuffer) in
+                        if playbackToken.isCancelled {
+                            state.writeFailed = true
+                            state.audioFile = nil
+                            if !state.continuationFinished {
+                                state.continuationFinished = true
+                                continuation.resume(returning: false)
+                            }
+                            return
+                        }
+                        
                         guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
                             print("[SpeechController] [Warning] Received non-PCM buffer")
                             return
@@ -394,8 +415,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                         return
                     }
                     print("[SpeechController] MainActor completion block: isSpeaking=\(self.isSpeaking)")
-                    guard self.isSpeaking else {
-                        print("[SpeechController] [Warning] isSpeaking is false, aborting playback")
+                    guard self.isSpeaking && !playbackToken.isCancelled else {
+                        print("[SpeechController] [Warning] isSpeaking is false or cancelled, aborting playback")
+                        try? FileManager.default.removeItem(at: fileURL)
                         return
                     }
                     
@@ -409,7 +431,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                                     try? FileManager.default.removeItem(at: fileURL)
                                     return
                                 }
-                                guard self.isSpeaking else {
+                                guard self.isSpeaking && !playbackToken.isCancelled else {
                                     if self.currentPlayingFileURL == fileURL {
                                         self.currentPlayingFileURL = nil
                                     }
@@ -553,12 +575,15 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
-    private func stopPlayback() {
+    func stopPlayback() {
         guard isPreparingPlayback || isSpeaking || isPlaybackAudible else {
             return
         }
 
         log("Stopping playback.")
+        
+        currentPlaybackToken?.isCancelled = true
+        currentPlaybackToken = nil
         
         if let fileURL = currentPlayingFileURL {
             try? FileManager.default.removeItem(at: fileURL)
@@ -655,5 +680,23 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         log("Speech synthesis cancelled.")
         finishPlayback(wasInterrupted: true)
+    }
+}
+
+final class PlaybackToken {
+    private let lock = NSLock()
+    private var _isCancelled = false
+    
+    var isCancelled: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _isCancelled
+        }
+        set {
+            lock.lock()
+            _isCancelled = newValue
+            lock.unlock()
+        }
     }
 }

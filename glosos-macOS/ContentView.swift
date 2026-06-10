@@ -489,6 +489,10 @@ struct ContentView: View {
         speechController.onStopPlayback = { [weak p2pController] in
             p2pController?.stopAudioPlayback()
         }
+        speechController.onSpeechStarted = { [weak agentController] in
+            agentController?.abortActiveTurn()
+            pendingUtteranceCoordinator.clear()
+        }
         speechController.isWebRTCConnected = p2pController.isConnected
         
         // Setup incoming WebRTC audio transcription callback

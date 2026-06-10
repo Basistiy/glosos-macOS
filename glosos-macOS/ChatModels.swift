@@ -209,6 +209,10 @@ struct PendingUtteranceCoordinator: Equatable {
         self.pendingUtterance = nil
         return pendingUtterance
     }
+
+    mutating func clear() {
+        pendingUtterance = nil
+    }
 }
 
 struct AssistantPlaybackCoordinator: Equatable {

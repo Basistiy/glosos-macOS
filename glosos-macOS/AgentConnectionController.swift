@@ -95,6 +95,7 @@ final class AgentConnectionController: ObservableObject {
     private let transport: AgentTransport
     private var activeRequestTask: Task<Void, Never>?
     private var userInitiatedDisconnect = false
+    private var isInterruptedByUser = false
     private var activeAssistantMessageID: UUID?
 
     private static let endpointURLKey = "agentEndpointURL"
@@ -159,6 +160,29 @@ final class AgentConnectionController: ObservableObject {
     func disconnect() {
         userInitiatedDisconnect = true
         disconnectInternal(reason: "Disconnected", shouldReportToChat: false)
+    }
+
+    func abortActiveTurn() {
+        guard activeRequestTask != nil || isAwaitingAssistantResponse else {
+            return
+        }
+        isInterruptedByUser = true
+        activeRequestTask?.cancel()
+        activeRequestTask = nil
+        isAwaitingAssistantResponse = false
+        
+        if let activeAssistantMessageID {
+            updateMessage(id: activeAssistantMessageID) { message in
+                message.state = .error
+                if message.text.isEmpty {
+                    message.text = "Interrupted by user speech."
+                } else {
+                    message.text += " [Interrupted]"
+                }
+            }
+        }
+        activeAssistantMessageID = nil
+        connectionStatus = "Connected"
     }
 
     func saveSettings() {
@@ -406,6 +430,11 @@ final class AgentConnectionController: ObservableObject {
         activeRequestTask = nil
 
         if userInitiatedDisconnect {
+            return
+        }
+
+        if isInterruptedByUser {
+            isInterruptedByUser = false
             return
         }
 
