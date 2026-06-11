@@ -241,19 +241,23 @@ final class AgentConnectionController: ObservableObject {
                         }
                     }
                 )
-            } catch is CancellationError {
-                await MainActor.run {
-                    guard let self else { return }
-                    self.handleRequestCancellation()
-                }
             } catch {
+                let isCancelled = Task.isCancelled ||
+                    error is CancellationError ||
+                    (error as? URLError)?.code == .cancelled ||
+                    (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled
+                
                 await MainActor.run {
                     guard let self else { return }
-                    self.failAssistantTurn(
-                        id: assistantMessageID,
-                        message: "The HTTP request failed: \(error.localizedDescription)"
-                    )
-                    self.isConnected = false
+                    if isCancelled {
+                        self.handleRequestCancellation()
+                    } else {
+                        self.failAssistantTurn(
+                            id: assistantMessageID,
+                            message: "The HTTP request failed: \(error.localizedDescription)"
+                        )
+                        self.isConnected = false
+                    }
                 }
             }
 

@@ -166,18 +166,33 @@ struct glosos_macOSTests {
     @MainActor
     func abortActiveTurnCancelsTaskAndLeavesControllerConnected() async throws {
         let transport = RecordingAgentTransport()
-        let controller = AgentConnectionController(transport: transport)
+        transport.shouldWaitAndThrowOnCancel = true
+        let suiteName = "AgentConnectionControllerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        
+        let controller = AgentConnectionController(
+            userDefaults: defaults,
+            transport: transport
+        )
         
         // Setup initial connected state
         await controller.connect(using: "http://127.0.0.1:18000")
         #expect(controller.isConnected)
         
-        // Start a turn
-        _ = controller.beginAssistantTurn(userText: "Interrupt me")
+        // Send a user message (which starts the task)
+        _ = controller.sendUserMessage("Interrupt me")
+        
+        // Allow the task to start running
+        try await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+        
         #expect(controller.isAwaitingAssistantResponse)
         
         // Abort the turn (simulating user speaking barge-in)
         controller.abortActiveTurn()
+        
+        // Allow the task cancellation catch block to execute on MainActor
+        try await Task.sleep(nanoseconds: 50_000_000) // 0.05s
         
         #expect(controller.isConnected) // Should still be connected
         #expect(controller.isAwaitingAssistantResponse == false)
@@ -216,6 +231,7 @@ struct glosos_macOSTests {
 
 final class RecordingAgentTransport: AgentTransport {
     private(set) var connectedEndpoints: [AgentEndpoint] = []
+    var shouldWaitAndThrowOnCancel = false
 
     func connect(to endpoint: AgentEndpoint) async throws {
         connectedEndpoints.append(endpoint)
@@ -228,8 +244,11 @@ final class RecordingAgentTransport: AgentTransport {
         to endpoint: AgentEndpoint,
         onEvent: @escaping @Sendable (AgentEvent) async -> Void
     ) async throws {
-        let _ = payload
-        let _ = endpoint
-        let _ = onEvent
+        if shouldWaitAndThrowOnCancel {
+            while !Task.isCancelled {
+                try await Task.sleep(nanoseconds: 10_000_000) // 0.01s
+            }
+            throw URLError(.cancelled)
+        }
     }
 }
