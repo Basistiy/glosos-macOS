@@ -204,25 +204,4 @@ struct AuthManagerTests {
         #expect(KeychainHelper.get(account: "current_user_token") == nil)
         #expect(mockDefaults.data(forKey: "currentUserInfo") == nil)
     }
-
-    @Test
-    @MainActor
-    func enteringOfflineModeSetsBypassStateAndResetsOnLogout() async throws {
-        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
-        let mockDefaults = UserDefaults(suiteName: suiteName)!
-        mockDefaults.removePersistentDomain(forName: suiteName)
-
-        let manager = AuthManager(userDefaults: mockDefaults)
-        manager.user = AuthUser(id: 1, username: "test")
-        manager.token = "some-token"
-
-        manager.enterOfflineMode()
-
-        #expect(manager.user == nil)
-        #expect(manager.token == nil)
-        #expect(manager.isOfflineMode == true)
-
-        manager.logout()
-        #expect(manager.isOfflineMode == false)
-    }
 }

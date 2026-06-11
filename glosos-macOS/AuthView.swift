@@ -168,25 +168,6 @@ public struct AuthView: View {
                     .buttonStyle(.plain)
                     .disabled(authManager.isLoading)
                     .opacity(authManager.isLoading ? 0.7 : 1.0)
-
-                    // Skip / Offline Mode Button
-                    Button {
-                        authManager.enterOfflineMode()
-                    } label: {
-                        Text("Use Offline Mode (No WebRTC)")
-                            .font(.system(.body, design: .rounded).weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.clear)
-                            .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .strokeBorder(Color(red: 0.18, green: 0.52, blue: 0.42), lineWidth: 1.5)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(authManager.isLoading)
-                    .opacity(authManager.isLoading ? 0.5 : 1.0)
                 }
                 .padding(24)
                 .background(.white.opacity(0.82))

@@ -22,7 +22,7 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if authManager.token == nil && !authManager.isOfflineMode {
+            if authManager.token == nil {
                 AuthView(authManager: authManager)
             } else {
                 HStack(spacing: 0) {
@@ -145,6 +145,14 @@ struct ContentView: View {
                     p2pController.disconnect()
                     speechController.stopContinuousListening()
                 }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    let semaphore = DispatchSemaphore(value: 0)
+                    Task {
+                        await stopManagedRuntime()
+                        semaphore.signal()
+                    }
+                    _ = semaphore.wait(timeout: .now() + 2.0)
+                }
             }
         }
     }
@@ -214,19 +222,6 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.72))
                 .clipShape(Capsule())
-            } else if authManager.isOfflineMode {
-                Label {
-                    Text("Offline Mode")
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                } icon: {
-                    Circle()
-                        .fill(Color(red: 0.78, green: 0.38, blue: 0.28))
-                        .frame(width: 8, height: 8)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.white.opacity(0.72))
-                .clipShape(Capsule())
             }
 
             Label {
@@ -290,11 +285,11 @@ struct ContentView: View {
             Button {
                 authManager.logout()
             } label: {
-                Image(systemName: authManager.isOfflineMode ? "person.crop.circle.badge.plus" : "rectangle.portrait.and.arrow.right")
+                Image(systemName: "rectangle.portrait.and.arrow.right")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 38, height: 38)
                     .background(.white.opacity(0.78))
-                    .foregroundStyle(authManager.isOfflineMode ? Color(red: 0.18, green: 0.52, blue: 0.42) : Color(red: 0.70, green: 0.28, blue: 0.23))
+                    .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
                     .clipShape(Circle())
             }
             .buttonStyle(.plain)

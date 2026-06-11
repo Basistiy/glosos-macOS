@@ -68,7 +68,6 @@ public final class AuthManager: ObservableObject {
     @Published public var error: String?
     @Published public var isLoading = false
     @Published public var signalingAPIEndpoint: String
-    @Published public var isOfflineMode = false
 
     private let userDefaults: UserDefaults
     private let urlSession: URLSession
@@ -106,7 +105,6 @@ public final class AuthManager: ObservableObject {
         // Load token from Keychain
         if let storedToken = KeychainHelper.get(account: Self.tokenAccountKey) {
             self.token = storedToken
-            self.isOfflineMode = false
         } else {
             // Clear both if token is missing
             self.token = nil
@@ -134,16 +132,8 @@ public final class AuthManager: ObservableObject {
         self.user = nil
         self.token = nil
         self.error = nil
-        self.isOfflineMode = false
         userDefaults.removeObject(forKey: Self.currentUserInfoKey)
         KeychainHelper.delete(account: Self.tokenAccountKey)
-    }
-
-    public func enterOfflineMode() {
-        self.user = nil
-        self.token = nil
-        self.error = nil
-        self.isOfflineMode = true
     }
 
     public func clearError() {
@@ -201,7 +191,6 @@ public final class AuthManager: ObservableObject {
 
                 self.user = authResponse.user
                 self.token = authResponse.token
-                self.isOfflineMode = false
                 self.isLoading = false
                 return true
             } else {
