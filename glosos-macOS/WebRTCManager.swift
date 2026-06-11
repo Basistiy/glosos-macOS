@@ -39,6 +39,28 @@ public final class WebRTCManager: NSObject {
         }
     }
     
+    private let mixerLock = NSLock()
+    private weak var outputMixer: AVAudioMixerNode?
+    private weak var audioEngine: AVAudioEngine?
+    
+    public var isSpeakersMuted: Bool = false {
+        didSet {
+            updateSpeakersMuteState()
+        }
+    }
+    
+    private func updateSpeakersMuteState() {
+        mixerLock.lock()
+        let mixer = outputMixer
+        mixerLock.unlock()
+        
+        let volume: Float = isSpeakersMuted ? 0.0 : 1.0
+        if let mixer = mixer {
+            mixer.outputVolume = volume
+            print("[WebRTCManager] Set custom output mixer volume to \(volume)")
+        }
+    }
+    
     private static let stunServers = [
         "stun:stun.l.google.com:19302",
         "stun:stun1.l.google.com:19302",
@@ -181,6 +203,11 @@ public final class WebRTCManager: NSObject {
         localAudioTrack = nil
         playerNode = nil
         mixerNode = nil
+        
+        mixerLock.lock()
+        outputMixer = nil
+        audioEngine = nil
+        mixerLock.unlock()
         
         bufferLock.lock()
         activeBuffersCount = 0
@@ -436,19 +463,34 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
     public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureOutputFromSource source: AVAudioNode, toDestination destination: AVAudioNode?, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
         print("[WebRTCManager] configureOutputFromSource called. Format: \(format)")
         
-        // In order to keep the pull chain active (so that our tap callback is called by the audio engine),
-        // we must not disconnect the output node from the main graph. Instead, we keep the connection
-        // active but set its output volume to 0 to prevent any actual playout to the physical speakers.
-        if let mixer = destination as? AVAudioMixerNode {
-            mixer.outputVolume = 1.0
-            print("[WebRTCManager] Set destination mixer node output volume to 1.0.")
+        // Break any default connections WebRTC/engine might have made
+        engine.disconnectNodeOutput(source)
+        if let dest = destination {
+            engine.disconnectNodeInput(dest)
         }
+        
+        let localOutputMixer = AVAudioMixerNode()
+        engine.attach(localOutputMixer)
+        
+        // Connect source -> localOutputMixer -> destination (or mainMixerNode if destination is nil)
+        engine.connect(source, to: localOutputMixer, format: format)
+        
+        let finalDest = destination ?? engine.mainMixerNode
+        engine.connect(localOutputMixer, to: finalDest, format: format)
+        
+        mixerLock.lock()
+        self.outputMixer = localOutputMixer
+        self.audioEngine = engine
+        localOutputMixer.outputVolume = isSpeakersMuted ? 0.0 : 1.0
+        mixerLock.unlock()
+        
+        print("[WebRTCManager] Configured custom output mixer node with volume: \(localOutputMixer.outputVolume)")
+        
+        // Keep mainMixerNode outputVolume at 1.0 to ensure voice processing / downlink DSP works
         engine.mainMixerNode.outputVolume = 1.0
-        print("[WebRTCManager] Set main mixer output volume to 1.0.")
         
         source.removeTap(onBus: 0)
         source.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] (buffer, time) in
-            print("[WebRTCManager] Tap received audio buffer with frameLength: \(buffer.frameLength)")
             guard let self = self else { return }
             self.onIncomingAudioBuffer?(buffer)
         }

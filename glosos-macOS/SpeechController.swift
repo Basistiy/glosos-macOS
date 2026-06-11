@@ -13,6 +13,7 @@ import Speech
 final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var isMicrophoneMuted = false
+    @Published private(set) var isSpeakersMuted = false
     @Published private(set) var statusMessage = "Ready to record incoming WebRTC audio."
     @Published private(set) var liveTranscript = ""
     @Published var finalizedUtterance: TranscribedUtterance? = nil
@@ -103,6 +104,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     func toggleMicrophoneMute() {
         isMicrophoneMuted ? unmuteMicrophone() : muteMicrophone()
+    }
+
+    func toggleSpeakersMute() {
+        isSpeakersMuted.toggle()
+        refreshStatusMessage()
     }
 
     var isReadyForLiveTranscription: Bool {
@@ -245,6 +251,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = speechVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.volume = isSpeakersMuted ? 0.0 : 1.0
 
         if isWebRTCConnected {
             let destinationDir = agentResponsesDirectoryURL ?? FileManager.default.temporaryDirectory

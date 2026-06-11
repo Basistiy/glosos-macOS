@@ -104,6 +104,10 @@ final class P2PConnectionController: ObservableObject {
         webRTCManager.isMicrophoneMuted = isMuted
     }
     
+    func setSpeakersMuted(_ isMuted: Bool) {
+        webRTCManager.isSpeakersMuted = isMuted
+    }
+    
     // MARK: - Private Call Cleanup
     
     private func cleanupCall() {
