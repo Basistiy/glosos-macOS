@@ -74,7 +74,16 @@ struct ContentView: View {
                     
                     // Forward LLM response to WebRTC peer if connected
                     if p2pController.isConnected {
-                        _ = p2pController.sendMessage(newValue.text)
+                        let payload: [String: Any] = [
+                            "type": "agent",
+                            "text": newValue.text
+                        ]
+                        if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                           let jsonString = String(data: jsonData, encoding: .utf8) {
+                            _ = p2pController.sendMessage(jsonString)
+                        } else {
+                            _ = p2pController.sendMessage(newValue.text)
+                        }
                     }
                     
                     sendPendingUtteranceIfPossible()
@@ -120,6 +129,19 @@ struct ContentView: View {
                     guard let newValue = newValue else {
                         return
                     }
+                    
+                    // Send voice transcription back to WebRTC peer if connected
+                    if p2pController.isConnected {
+                        let payload: [String: Any] = [
+                            "type": "transcription",
+                            "text": newValue.text
+                        ]
+                        if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+                           let jsonString = String(data: jsonData, encoding: .utf8) {
+                            _ = p2pController.sendMessage(jsonString)
+                        }
+                    }
+                    
                     enqueueOrSend(newValue)
                 }
                 .onChange(of: runtimeController.runtimeMode) { _, _ in
