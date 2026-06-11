@@ -13,7 +13,7 @@ import Speech
 final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var isMicrophoneMuted = false
-    @Published private(set) var isSpeakersMuted = false
+    @Published private(set) var isSpeakersMuted = true
     @Published private(set) var statusMessage = "Ready to record incoming WebRTC audio."
     @Published private(set) var liveTranscript = ""
     @Published var finalizedUtterance: TranscribedUtterance? = nil

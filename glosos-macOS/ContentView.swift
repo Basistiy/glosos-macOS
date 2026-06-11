@@ -338,67 +338,43 @@ struct ContentView: View {
                         .foregroundStyle(Color.black.opacity(0.48))
                 }
 
-                HStack(spacing: 8) {
-                    Button {
-                        speechController.toggleSpeakersMute()
-                    } label: {
-                        Label(
-                            speechController.isSpeakersMuted ? "Unmute Speakers" : "Mute Speakers",
-                            systemImage: speechController.isSpeakersMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
-                        )
-                        .font(.system(.caption, design: .rounded).weight(.semibold))
-                        .foregroundStyle(
-                            speechController.isSpeakersMuted ? Color.white : Color(red: 0.18, green: 0.32, blue: 0.45)
-                        )
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            speechController.isSpeakersMuted
-                                ? Color(red: 0.73, green: 0.34, blue: 0.21)
-                                : Color(red: 0.88, green: 0.92, blue: 0.96)
-                        )
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        if speechController.isReadyForLiveTranscription {
-                            speechController.toggleMicrophoneMute()
-                        } else {
-                            Task {
-                                await speechController.startContinuousListening()
-                            }
+                Button {
+                    if speechController.isReadyForLiveTranscription {
+                        speechController.toggleMicrophoneMute()
+                    } else {
+                        Task {
+                            await speechController.startContinuousListening()
                         }
-                    } label: {
-                        Label(
-                            speechController.isReadyForLiveTranscription
-                                ? (speechController.isMicrophoneMuted ? "Resume" : "Pause")
-                                : "Enable Recording",
-                            systemImage: speechController.isReadyForLiveTranscription
-                                ? (speechController.isMicrophoneMuted ? "play.circle.fill" : "pause.circle.fill")
-                                : "waveform.badge.plus"
-                        )
-                        .font(.system(.caption, design: .rounded).weight(.semibold))
-                        .foregroundStyle(
-                            speechController.isReadyForLiveTranscription
-                                ? (speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
-                                : Color(red: 0.35, green: 0.24, blue: 0.18)
-                        )
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            speechController.isReadyForLiveTranscription
-                                ? (
-                                    speechController.isMicrophoneMuted
-                                        ? Color(red: 0.73, green: 0.34, blue: 0.21)
-                                        : Color(red: 0.95, green: 0.89, blue: 0.84)
-                                )
-                                : Color(red: 0.95, green: 0.89, blue: 0.84)
-                        )
-                        .clipShape(Capsule())
                     }
-                    .buttonStyle(.plain)
+                } label: {
+                    Label(
+                        speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? "Resume" : "Pause")
+                            : "Enable Recording",
+                        systemImage: speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? "play.circle.fill" : "pause.circle.fill")
+                            : "waveform.badge.plus"
+                    )
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .foregroundStyle(
+                        speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
+                            : Color(red: 0.35, green: 0.24, blue: 0.18)
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        speechController.isReadyForLiveTranscription
+                            ? (
+                                speechController.isMicrophoneMuted
+                                    ? Color(red: 0.73, green: 0.34, blue: 0.21)
+                                    : Color(red: 0.95, green: 0.89, blue: 0.84)
+                            )
+                            : Color(red: 0.95, green: 0.89, blue: 0.84)
+                    )
+                    .clipShape(Capsule())
                 }
+                .buttonStyle(.plain)
             }
 
             Text(liveTranscriptText)

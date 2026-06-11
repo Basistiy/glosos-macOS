@@ -43,7 +43,7 @@ public final class WebRTCManager: NSObject {
     private weak var outputMixer: AVAudioMixerNode?
     private weak var audioEngine: AVAudioEngine?
     
-    public var isSpeakersMuted: Bool = false {
+    public var isSpeakersMuted: Bool = true {
         didSet {
             updateSpeakersMuteState()
         }
