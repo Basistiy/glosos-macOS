@@ -273,6 +273,12 @@ extension P2PConnectionController: SignalingClientDelegate {
         appendSystemMessage("Signaling error: \(error.localizedDescription)", state: .error)
         cleanupCall()
     }
+    
+    public func signalingClient(_ client: SignalingClient, willAttemptReconnect attempt: Int, delay: TimeInterval) {
+        print("[P2PConnectionController] Signaling reconnect attempt \(attempt) in \(delay) seconds...")
+        statusDetail = "Reconnecting (attempt \(attempt)/5)..."
+        appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/5)...", state: .final)
+    }
 }
 
 // MARK: - WebRTCManagerDelegate

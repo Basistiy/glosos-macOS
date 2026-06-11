@@ -227,6 +227,57 @@ struct glosos_macOSTests {
         #expect(controller.isSpeaking == false)
     }
 
+    @Test
+    @MainActor
+    func signalingClientAttemptsReconnectionOnFailure() async throws {
+        let client = SignalingClient(apiEndpoint: "http://127.0.0.1:59999/api", token: "test-token")
+        
+        class MockDelegate: SignalingClientDelegate, @unchecked Sendable {
+            var didFailCalled = false
+            var willAttemptReconnectCalled = false
+            var reconnectAttemptNumber = 0
+            var reconnectDelay: TimeInterval = 0
+            
+            let onReconnect: @MainActor () -> Void
+            
+            init(onReconnect: @escaping @MainActor () -> Void) {
+                self.onReconnect = onReconnect
+            }
+            
+            func signalingClientDidConnect(_ client: SignalingClient) {}
+            func signalingClientDidDisconnect(_ client: SignalingClient) {}
+            func signalingClient(_ client: SignalingClient, didReceiveIncomingCall callerSocketId: String, callerUsername: String, offer: [String: Any]) {}
+            func signalingClient(_ client: SignalingClient, didReceiveIceCandidate senderSocketId: String, candidate: [String: Any]) {}
+            func signalingClient(_ client: SignalingClient, didReceiveHangUp senderSocketId: String) {}
+            
+            func signalingClient(_ client: SignalingClient, didFailWithError error: Error) {
+                didFailCalled = true
+            }
+            
+            func signalingClient(_ client: SignalingClient, willAttemptReconnect attempt: Int, delay: TimeInterval) {
+                willAttemptReconnectCalled = true
+                reconnectAttemptNumber = attempt
+                reconnectDelay = delay
+                onReconnect()
+            }
+        }
+        
+        var delegateCalled = false
+        
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let delegate = MockDelegate {
+                delegateCalled = true
+                continuation.resume()
+            }
+            client.delegate = delegate
+            client.connect()
+        }
+        
+        client.disconnect()
+        
+        #expect(delegateCalled)
+    }
+
 }
 
 final class RecordingAgentTransport: AgentTransport {
