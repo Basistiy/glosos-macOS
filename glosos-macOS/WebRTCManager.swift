@@ -21,6 +21,7 @@ public final class WebRTCManager: NSObject {
     private var peerConnectionFactory: RTCPeerConnectionFactory
     private var peerConnection: RTCPeerConnection?
     private var dataChannel: RTCDataChannel?
+    private var pendingIceCandidates: [RTCIceCandidate] = []
     
     private var localAudioTrack: RTCAudioTrack?
     private var playerNode: AVAudioPlayerNode?
@@ -84,11 +85,13 @@ public final class WebRTCManager: NSObject {
         RTCCleanupSSL()
     }
     
-    public func createPeerConnection() -> Bool {
+    public func createPeerConnection(iceServers: [RTCIceServer] = []) -> Bool {
         cleanup()
         
         let config = RTCConfiguration()
-        config.iceServers = [RTCIceServer(urlStrings: Self.stunServers)]
+        var servers = [RTCIceServer(urlStrings: Self.stunServers)]
+        servers.append(contentsOf: iceServers)
+        config.iceServers = servers
         config.sdpSemantics = .unifiedPlan
         
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
@@ -124,6 +127,7 @@ public final class WebRTCManager: NSObject {
         let remoteDescription = RTCSessionDescription(type: .offer, sdp: offerSdp)
         
         pc.setRemoteDescription(remoteDescription) { [weak self] error in
+            guard let self = self else { return }
             if let error = error {
                 print("[WebRTCManager] SetRemoteDescription (Offer) failed: \(error.localizedDescription)")
                 DispatchQueue.main.async { completion(.failure(error)) }
@@ -131,6 +135,7 @@ public final class WebRTCManager: NSObject {
             }
             
             print("[WebRTCManager] SetRemoteDescription (Offer) succeeded.")
+            self.flushPendingIceCandidates()
             
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc.answer(for: constraints) { [weak self] localSdp, error in
@@ -167,11 +172,32 @@ public final class WebRTCManager: NSObject {
             print("[WebRTCManager] Cannot add ICE candidate: peerConnection is nil")
             return
         }
-        pc.add(candidate) { error in
-            if let error = error {
-                print("[WebRTCManager] Failed to add ICE candidate: \(error.localizedDescription)")
-            } else {
-                // print("[WebRTCManager] Added remote ICE candidate successfully")
+        
+        if pc.remoteDescription != nil {
+            pc.add(candidate) { error in
+                if let error = error {
+                    print("[WebRTCManager] Failed to add ICE candidate: \(error.localizedDescription)")
+                }
+            }
+        } else {
+            print("[WebRTCManager] Queuing remote ICE candidate (remote description not set)")
+            pendingIceCandidates.append(candidate)
+        }
+    }
+    
+    private func flushPendingIceCandidates() {
+        guard let pc = peerConnection else { return }
+        guard !pendingIceCandidates.isEmpty else { return }
+        
+        print("[WebRTCManager] Flushing \(pendingIceCandidates.count) pending remote ICE candidates")
+        let candidates = pendingIceCandidates
+        pendingIceCandidates.removeAll()
+        
+        for candidate in candidates {
+            pc.add(candidate) { error in
+                if let error = error {
+                    print("[WebRTCManager] Failed to add flushed ICE candidate: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -201,6 +227,7 @@ public final class WebRTCManager: NSObject {
             peerConnection = nil
         }
         localAudioTrack = nil
+        pendingIceCandidates.removeAll()
         playerNode = nil
         mixerNode = nil
         

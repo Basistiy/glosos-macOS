@@ -25,6 +25,7 @@ final class P2PConnectionController: ObservableObject {
     
     private var signalingClient: SignalingClient?
     private let webRTCManager: WebRTCManager
+    private var turnServers: [RTCIceServer] = []
     
     private var currentCallerSocketId: String?
     private var peerUsername: String?
@@ -34,12 +35,65 @@ final class P2PConnectionController: ObservableObject {
         self.webRTCManager.delegate = self
     }
     
+    private func fetchTurnCredentials(apiEndpoint: String, token: String) async -> [RTCIceServer] {
+        var endpoint = apiEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if endpoint.hasSuffix("/") {
+            endpoint.removeLast()
+        }
+        
+        guard let url = URL(string: "\(endpoint)/turn/credentials") else {
+            print("[P2PConnectionController] Invalid apiEndpoint URL for TURN credentials")
+            return []
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                print("[P2PConnectionController] Failed to fetch TURN credentials (status code: \( (response as? HTTPURLResponse)?.statusCode ?? 0 ))")
+                return []
+            }
+            
+            struct TurnResponse: Codable {
+                let url: String?
+                let urls: [String]?
+                let username: String?
+                let credential: String?
+            }
+            
+            let turnData = try JSONDecoder().decode(TurnResponse.self, from: data)
+            let urls = turnData.urls ?? (turnData.url.map { [$0] } ?? [])
+            guard !urls.isEmpty else { return [] }
+            
+            let turnServer = RTCIceServer(
+                urlStrings: urls,
+                username: turnData.username,
+                credential: turnData.credential
+            )
+            return [turnServer]
+        } catch {
+            print("[P2PConnectionController] Error fetching TURN credentials: \(error.localizedDescription)")
+            return []
+        }
+    }
+    
     func startSignaling(apiEndpoint: String, token: String) {
         // Disconnect any existing session first
         disconnect()
         
         print("[P2PConnectionController] Starting signaling connection...")
         statusDetail = "Connecting to signaling server..."
+        
+        self.turnServers = []
+        Task {
+            let servers = await fetchTurnCredentials(apiEndpoint: apiEndpoint, token: token)
+            self.turnServers = servers
+            print("[P2PConnectionController] Ephemeral TURN credentials loaded: \(servers.count) servers found.")
+        }
         
         let client = SignalingClient(apiEndpoint: apiEndpoint, token: token)
         client.delegate = self
@@ -158,7 +212,7 @@ extension P2PConnectionController: SignalingClientDelegate {
         
         print("[P2PConnectionController] Incoming call from \(callerUsername) (\(callerSocketId)). Creating PeerConnection...")
         
-        let pcCreated = webRTCManager.createPeerConnection()
+        let pcCreated = webRTCManager.createPeerConnection(iceServers: self.turnServers)
         guard pcCreated else {
             statusDetail = "Failed to create PeerConnection"
             appendSystemMessage("WebRTC error: Failed to create PeerConnection.", state: .error)
