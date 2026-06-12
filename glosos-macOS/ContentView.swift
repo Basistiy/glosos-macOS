@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var p2pController = P2PConnectionController()
     @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
     @AppStorage("preventSystemSleep") private var preventSystemSleep = false
+    @State private var isShowingSettings = false
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
     @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
@@ -25,14 +26,42 @@ struct ContentView: View {
             if authManager.token == nil {
                 AuthView(authManager: authManager)
             } else {
-                VStack(spacing: 0) {
-                    header
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        header
 
-                    Divider()
-                        .overlay(Color.black.opacity(0.06))
+                        Divider()
+                            .overlay(Color.black.opacity(0.06))
 
-                    HStack(spacing: 0) {
-                        Spacer()
+                        VStack(spacing: 12) {
+                            Spacer()
+                            Image(systemName: "laptopcomputer.and.iphone")
+                                .font(.system(size: 48))
+                                .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                            Text("connect to your mac at glosos.com")
+                                .font(.system(.title3, design: .rounded).weight(.semibold))
+                                .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+                                .multilineTextAlignment(.center)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(
+                            LinearGradient(
+                                colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+
+                        Divider()
+                            .overlay(Color.black.opacity(0.06))
+
+                        liveTranscriptPanel
+                    }
+
+                    if isShowingSettings {
+                        Divider()
+                            .overlay(Color.black.opacity(0.06))
 
                         SettingsView(
                             speechController: speechController,
@@ -43,21 +72,17 @@ struct ContentView: View {
                             connectAction: { Task { await connectUsingSelectedRuntime() } },
                             startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
                             stopRuntimeAction: { Task { await stopManagedRuntime() } },
-                            restartRuntimeAction: { Task { await restartManagedRuntime() } }
+                            restartRuntimeAction: { Task { await restartManagedRuntime() } },
+                            closeAction: {
+                                saveSettings()
+                                isShowingSettings = false
+                            }
                         )
-                        .frame(maxWidth: 640)
-
-                        Spacer()
+                        .frame(width: 380)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-
                 }
+                .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isShowingSettings)
                 .task {
                     await initializeIfNeeded()
                 }
@@ -249,6 +274,25 @@ struct ContentView: View {
             .buttonStyle(.plain)
 
             Button {
+                if isShowingSettings {
+                    saveSettings()
+                }
+                isShowingSettings.toggle()
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(
+                        isShowingSettings
+                            ? Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.92)
+                            : .white.opacity(0.78)
+                    )
+                    .foregroundStyle(isShowingSettings ? .white : Color.primary)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Button {
                 authManager.logout()
             } label: {
                 Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -392,7 +436,124 @@ struct ContentView: View {
         _ = agentController.sendUserMessage(pendingUtterance)
     }
 
+    private var liveTranscriptPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    microphoneStatusLabel,
+                    systemImage: microphoneStatusIcon
+                )
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(microphoneStatusColor)
 
+                Spacer()
+
+                if agentController.isAwaitingAssistantResponse {
+                    Text("Agent replying")
+                        .font(.system(.caption, design: .rounded).weight(.semibold))
+                        .foregroundStyle(Color.black.opacity(0.48))
+                }
+
+                Button {
+                    if speechController.isReadyForLiveTranscription {
+                        speechController.toggleMicrophoneMute()
+                    } else {
+                        Task {
+                            await speechController.startContinuousListening()
+                        }
+                    }
+                } label: {
+                    Label(
+                        speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? "Resume" : "Pause")
+                            : "Enable Recording",
+                        systemImage: speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? "play.circle.fill" : "pause.circle.fill")
+                            : "waveform.badge.plus"
+                    )
+                    .font(.system(.caption, design: .rounded).weight(.semibold))
+                    .foregroundStyle(
+                        speechController.isReadyForLiveTranscription
+                            ? (speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
+                            : Color(red: 0.35, green: 0.24, blue: 0.18)
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        speechController.isReadyForLiveTranscription
+                            ? (
+                                speechController.isMicrophoneMuted
+                                    ? Color(red: 0.73, green: 0.34, blue: 0.21)
+                                    : Color(red: 0.95, green: 0.89, blue: 0.84)
+                            )
+                            : Color(red: 0.95, green: 0.89, blue: 0.84)
+                    )
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(liveTranscriptText)
+                .font(.system(.body, design: .rounded))
+                .foregroundStyle(speechController.isCapturingSpeech ? Color.primary : Color.black.opacity(0.48))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let pendingText = pendingUtteranceCoordinator.pendingUtterance?.text {
+                Text("Queued next turn: \(pendingText)")
+                    .font(.system(.caption, design: .rounded))
+                    .foregroundStyle(Color(red: 0.55, green: 0.33, blue: 0.17))
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+        .background(.white.opacity(0.82))
+    }
+
+    private var liveTranscriptText: String {
+        if !speechController.isReadyForLiveTranscription {
+            return speechController.statusMessage
+        }
+
+        if speechController.isMicrophoneMuted {
+            return agentController.isAwaitingAssistantResponse
+                ? "Transcription is paused. Assistant playback will continue without spoken interruptions."
+                : "Transcription is paused. Resume when you want to transcribe WebRTC audio again."
+        }
+
+        let transcript = speechController.displayedLiveTranscript
+        if !transcript.isEmpty {
+            return transcript
+        }
+
+        return agentController.isAwaitingAssistantResponse
+            ? "Incoming WebRTC audio will interrupt playback."
+            : "Stream incoming WebRTC audio to transcribe."
+    }
+
+    private var microphoneStatusLabel: String {
+        if speechController.isMicrophoneMuted {
+            return "Transcription paused"
+        }
+
+        return speechController.isCapturingSpeech ? "Transcribing speech..." : "Transcription ready"
+    }
+
+    private var microphoneStatusIcon: String {
+        if speechController.isMicrophoneMuted {
+            return "pause.fill"
+        }
+
+        return speechController.isCapturingSpeech ? "waveform.badge.mic" : "waveform"
+    }
+
+    private var microphoneStatusColor: Color {
+        if speechController.isMicrophoneMuted {
+            return Color(red: 0.71, green: 0.32, blue: 0.20)
+        }
+
+        return Color(red: 0.16, green: 0.20, blue: 0.17)
+    }
 
     private func saveSettings() {
         NSApp.keyWindow?.makeFirstResponder(nil)
@@ -413,9 +574,26 @@ private struct SettingsView: View {
     let startRuntimeAction: () -> Void
     let stopRuntimeAction: () -> Void
     let restartRuntimeAction: () -> Void
+    let closeAction: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Settings")
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+
+                Spacer()
+
+                Button("Close") {
+                    closeAction()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+
+            Divider()
 
             Form {
                 Section("Runtime") {
