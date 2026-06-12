@@ -16,7 +16,6 @@ struct ContentView: View {
     @StateObject private var p2pController = P2PConnectionController()
     @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
     @AppStorage("preventSystemSleep") private var preventSystemSleep = false
-    @State private var isShowingSettings = false
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
     @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
@@ -26,12 +25,14 @@ struct ContentView: View {
             if authManager.token == nil {
                 AuthView(authManager: authManager)
             } else {
-                HStack(spacing: 0) {
-                    mainContent
+                VStack(spacing: 0) {
+                    header
 
-                    if isShowingSettings {
-                        Divider()
-                            .overlay(Color.black.opacity(0.06))
+                    Divider()
+                        .overlay(Color.black.opacity(0.06))
+
+                    HStack(spacing: 0) {
+                        Spacer()
 
                         SettingsView(
                             speechController: speechController,
@@ -42,24 +43,21 @@ struct ContentView: View {
                             connectAction: { Task { await connectUsingSelectedRuntime() } },
                             startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
                             stopRuntimeAction: { Task { await stopManagedRuntime() } },
-                            restartRuntimeAction: { Task { await restartManagedRuntime() } },
-                            closeAction: {
-                                saveSettings()
-                                isShowingSettings = false
-                            }
+                            restartRuntimeAction: { Task { await restartManagedRuntime() } }
                         )
-                        .frame(width: 380)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .frame(maxWidth: 640)
+
+                        Spacer()
                     }
-                }
-                .background(
-                    LinearGradient(
-                        colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
-                .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isShowingSettings)
+
+                }
                 .task {
                     await initializeIfNeeded()
                 }
@@ -184,43 +182,7 @@ struct ContentView: View {
         }
     }
 
-    private var mainContent: some View {
-        VStack(spacing: 0) {
-            header
 
-            Divider()
-                .overlay(Color.black.opacity(0.06))
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 14) {
-                        let messagesToShow = agentController.messages
-                        
-                        if messagesToShow.isEmpty {
-                            emptyState
-                        }
-
-                        ForEach(messagesToShow) { message in
-                            ChatBubbleRow(message: message, speechController: speechController)
-                        }
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id("chat-bottom")
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-                }
-                .background(chatBackground)
-                .task(id: chatScrollState) {
-                    await Task.yield()
-                    scrollToBottom(with: proxy)
-                }
-            }
-
-            liveTranscriptPanel
-        }
-    }
 
     private var header: some View {
         HStack(spacing: 14) {
@@ -291,25 +253,6 @@ struct ContentView: View {
             .buttonStyle(.plain)
 
             Button {
-                if isShowingSettings {
-                    saveSettings()
-                }
-                isShowingSettings.toggle()
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 38, height: 38)
-                    .background(
-                        isShowingSettings
-                            ? Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.92)
-                            : .white.opacity(0.78)
-                    )
-                    .foregroundStyle(isShowingSettings ? .white : Color.primary)
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-
-            Button {
                 authManager.logout()
             } label: {
                 Image(systemName: "rectangle.portrait.and.arrow.right")
@@ -326,163 +269,6 @@ struct ContentView: View {
         .background(.ultraThinMaterial)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Text("Waiting for connection")
-                .font(.system(.title3, design: .rounded).weight(.semibold))
-                .foregroundStyle(Color(red: 0.18, green: 0.22, blue: 0.19))
-
-            Text("Connect from a WebRTC peer and start speaking. The app will stream and transcribe audio automatically.")
-                .font(.system(.body, design: .rounded))
-                .foregroundStyle(Color.black.opacity(0.5))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-    }
-
-    private var liveTranscriptPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label(
-                    microphoneStatusLabel,
-                    systemImage: microphoneStatusIcon
-                )
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .foregroundStyle(microphoneStatusColor)
-
-                Spacer()
-
-                if agentController.isAwaitingAssistantResponse {
-                    Text("Agent replying")
-                        .font(.system(.caption, design: .rounded).weight(.semibold))
-                        .foregroundStyle(Color.black.opacity(0.48))
-                }
-
-                Button {
-                    if speechController.isReadyForLiveTranscription {
-                        speechController.toggleMicrophoneMute()
-                    } else {
-                        Task {
-                            await speechController.startContinuousListening()
-                        }
-                    }
-                } label: {
-                    Label(
-                        speechController.isReadyForLiveTranscription
-                            ? (speechController.isMicrophoneMuted ? "Resume" : "Pause")
-                            : "Enable Recording",
-                        systemImage: speechController.isReadyForLiveTranscription
-                            ? (speechController.isMicrophoneMuted ? "play.circle.fill" : "pause.circle.fill")
-                            : "waveform.badge.plus"
-                    )
-                    .font(.system(.caption, design: .rounded).weight(.semibold))
-                    .foregroundStyle(
-                        speechController.isReadyForLiveTranscription
-                            ? (speechController.isMicrophoneMuted ? Color.white : Color(red: 0.35, green: 0.24, blue: 0.18))
-                            : Color(red: 0.35, green: 0.24, blue: 0.18)
-                    )
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        speechController.isReadyForLiveTranscription
-                            ? (
-                                speechController.isMicrophoneMuted
-                                    ? Color(red: 0.73, green: 0.34, blue: 0.21)
-                                    : Color(red: 0.95, green: 0.89, blue: 0.84)
-                            )
-                            : Color(red: 0.95, green: 0.89, blue: 0.84)
-                    )
-                    .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-
-            Text(liveTranscriptText)
-                .font(.system(.body, design: .rounded))
-                .foregroundStyle(speechController.isCapturingSpeech ? Color.primary : Color.black.opacity(0.48))
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let pendingText = pendingUtteranceCoordinator.pendingUtterance?.text {
-                Text("Queued next turn: \(pendingText)")
-                    .font(.system(.caption, design: .rounded))
-                    .foregroundStyle(Color(red: 0.55, green: 0.33, blue: 0.17))
-                    .lineLimit(2)
-            }
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
-        .background(.white.opacity(0.82))
-    }
-
-    private var liveTranscriptText: String {
-        if !speechController.isReadyForLiveTranscription {
-            return speechController.statusMessage
-        }
-
-        if speechController.isMicrophoneMuted {
-            return agentController.isAwaitingAssistantResponse
-                ? "Transcription is paused. Assistant playback will continue without spoken interruptions."
-                : "Transcription is paused. Resume when you want to transcribe WebRTC audio again."
-        }
-
-        let transcript = speechController.displayedLiveTranscript
-        if !transcript.isEmpty {
-            return transcript
-        }
-
-        return agentController.isAwaitingAssistantResponse
-            ? "Incoming WebRTC audio will interrupt playback."
-            : "Stream incoming WebRTC audio to transcribe."
-    }
-
-    private var chatBackground: some View {
-        ZStack {
-            Color(red: 0.97, green: 0.96, blue: 0.94)
-
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.55),
-                    Color(red: 0.90, green: 0.93, blue: 0.89).opacity(0.2)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-    }
-
-    private var chatScrollState: ChatScrollState {
-        ChatScrollState(
-            lastMessageID: agentController.messages.last?.id,
-            lastMessageLength: agentController.messages.last?.text.count ?? 0,
-            transcript: speechController.displayedLiveTranscript
-        )
-    }
-
-    private var microphoneStatusLabel: String {
-        if speechController.isMicrophoneMuted {
-            return "Transcription paused"
-        }
-
-        return speechController.isCapturingSpeech ? "Transcribing speech..." : "Transcription ready"
-    }
-
-    private var microphoneStatusIcon: String {
-        if speechController.isMicrophoneMuted {
-            return "pause.fill"
-        }
-
-        return speechController.isCapturingSpeech ? "waveform.badge.mic" : "waveform"
-    }
-
-    private var microphoneStatusColor: Color {
-        if speechController.isMicrophoneMuted {
-            return Color(red: 0.71, green: 0.32, blue: 0.20)
-        }
-
-        return Color(red: 0.16, green: 0.20, blue: 0.17)
-    }
 
     private func openManagedUserFolder() {
         let userFolderURL = runtimeController.managedUserFolderURL
@@ -610,13 +396,7 @@ struct ContentView: View {
         _ = agentController.sendUserMessage(pendingUtterance)
     }
 
-    private func scrollToBottom(with proxy: ScrollViewProxy) {
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.18)) {
-                proxy.scrollTo("chat-bottom", anchor: .bottom)
-            }
-        }
-    }
+
 
     private func saveSettings() {
         NSApp.keyWindow?.makeFirstResponder(nil)
@@ -625,116 +405,7 @@ struct ContentView: View {
     }
 }
 
-private struct ChatScrollState: Equatable {
-    let lastMessageID: UUID?
-    let lastMessageLength: Int
-    let transcript: String
-}
 
-private struct ChatBubbleRow: View {
-    let message: ChatMessage
-    @ObservedObject var speechController: SpeechController
-
-    var body: some View {
-        switch message.role {
-        case .system:
-            Text(message.text)
-                .font(.system(.footnote, design: .rounded))
-                .foregroundStyle(message.state == .error ? Color(red: 0.70, green: 0.28, blue: 0.23) : Color.black.opacity(0.55))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.white.opacity(0.7))
-                .clipShape(Capsule())
-                .frame(maxWidth: .infinity)
-        case .user, .assistant:
-            HStack {
-                if message.role == .assistant {
-                    bubble
-                    Spacer(minLength: 56)
-                } else {
-                    Spacer(minLength: 56)
-                    bubble
-                }
-            }
-        }
-    }
-
-    private var bubble: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.system(.caption, design: .rounded).weight(.semibold))
-                .foregroundStyle(labelColor)
-
-            Text(message.text.isEmpty && message.state == .streaming ? "..." : message.text)
-                .font(.system(.body, design: .rounded))
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-
-
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
-        .background(bubbleBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: 1)
-        )
-        .frame(maxWidth: 420, alignment: message.role == .assistant ? .leading : .trailing)
-    }
-
-    private var label: String {
-        switch message.role {
-        case .assistant:
-            return message.state == .streaming ? "Agent is typing" : "Agent"
-        case .user:
-            return "You"
-        case .system:
-            return "System"
-        }
-    }
-
-    private var bubbleBackground: Color {
-        switch message.role {
-        case .assistant:
-            return Color.white.opacity(0.94)
-        case .user:
-            return Color(red: 0.18, green: 0.52, blue: 0.42).opacity(message.state == .error ? 0.70 : 0.96)
-        case .system:
-            return .clear
-        }
-    }
-
-    private var borderColor: Color {
-        switch message.role {
-        case .assistant:
-            return message.state == .error ? Color(red: 0.75, green: 0.41, blue: 0.35) : Color.black.opacity(0.06)
-        case .user:
-            return Color.white.opacity(0.15)
-        case .system:
-            return .clear
-        }
-    }
-
-    private var labelColor: Color {
-        switch message.role {
-        case .assistant:
-            return message.state == .error ? Color(red: 0.71, green: 0.31, blue: 0.24) : Color.black.opacity(0.44)
-        case .user:
-            return Color.white.opacity(0.78)
-        case .system:
-            return Color.black.opacity(0.44)
-        }
-    }
-
-    private var textColor: Color {
-        message.role == .user ? .white : Color(red: 0.14, green: 0.16, blue: 0.15)
-    }
-
-    private func formattedDuration(_ duration: TimeInterval) -> String {
-        String(format: "%.1fs", duration)
-    }
-}
 
 private struct SettingsView: View {
     @ObservedObject var speechController: SpeechController
@@ -746,26 +417,9 @@ private struct SettingsView: View {
     let startRuntimeAction: () -> Void
     let stopRuntimeAction: () -> Void
     let restartRuntimeAction: () -> Void
-    let closeAction: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text("Settings")
-                    .font(.system(.title3, design: .rounded).weight(.bold))
-                    .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
-
-                Spacer()
-
-                Button("Close") {
-                    closeAction()
-                }
-                .buttonStyle(.bordered)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-
-            Divider()
 
             Form {
                 Section("Runtime") {
