@@ -178,7 +178,10 @@ public final class SignalingClient: NSObject {
             // Engine.IO Handshake packet
             print("[SignalingClient] Engine.IO handshake received: \(text)")
             // Send Socket.IO connect packet to the default namespace (40) with JWT Auth Token in payload
-            let authPayload = ["token": self.token]
+            let authPayload = [
+                "token": self.token,
+                "clientType": "mac-server"
+            ]
             if let data = try? JSONSerialization.data(withJSONObject: authPayload, options: []),
                let jsonString = String(data: data, encoding: .utf8) {
                 let connectMsg = "40\(jsonString)"
