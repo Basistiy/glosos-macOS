@@ -38,10 +38,17 @@ struct ContentView: View {
                             Image(systemName: "laptopcomputer.and.iphone")
                                 .font(.system(size: 48))
                                 .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
-                            Text("connect to your mac at glosos.com")
-                                .font(.system(.title3, design: .rounded).weight(.semibold))
-                                .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
-                                .multilineTextAlignment(.center)
+                            Link(destination: URL(string: "https://glosos.com")!) {
+                                Text("connect to your mac at glosos.com")
+                                    .font(.system(.body, design: .rounded).weight(.semibold))
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                    .foregroundStyle(.white)
+                                    .cornerRadius(12)
+                                    .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
+                            }
+                            .buttonStyle(.plain)
                             Spacer()
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
