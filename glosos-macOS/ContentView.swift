@@ -85,6 +85,7 @@ struct ContentView: View {
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
+                .frame(minWidth: isShowingSettings ? 980 : 600, minHeight: 600)
                 .animation(.spring(response: 0.28, dampingFraction: 0.88), value: isShowingSettings)
                 .task {
                     await initializeIfNeeded()
@@ -218,6 +219,8 @@ struct ContentView: View {
                 Text("Glosos")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+                    .lineLimit(1)
+                    .layoutPriority(1)
             }
 
             Spacer()
@@ -226,6 +229,7 @@ struct ContentView: View {
                 Label {
                     Text(user.username)
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .lineLimit(1)
                 } icon: {
                     Circle()
                         .fill(Color(red: 0.18, green: 0.52, blue: 0.42))
@@ -235,11 +239,13 @@ struct ContentView: View {
                 .padding(.vertical, 8)
                 .background(.white.opacity(0.72))
                 .clipShape(Capsule())
+                .fixedSize(horizontal: true, vertical: false)
             }
 
             Label {
                 Text(agentController.statusDetail)
                     .font(.system(.subheadline, design: .rounded))
+                    .lineLimit(1)
             } icon: {
                 Circle()
                     .fill(agentController.isConnected ? Color(red: 0.16, green: 0.57, blue: 0.43) : Color(red: 0.78, green: 0.38, blue: 0.28))
@@ -249,11 +255,13 @@ struct ContentView: View {
             .padding(.vertical, 9)
             .background(.white.opacity(0.72))
             .clipShape(Capsule())
+            .fixedSize(horizontal: true, vertical: false)
 
             if authManager.token != nil {
                 Label {
                     Text(p2pController.isConnected ? "Peer connected" : p2pController.statusDetail)
                         .font(.system(.subheadline, design: .rounded))
+                        .lineLimit(1)
                 } icon: {
                     Circle()
                         .fill(p2pController.isConnected ? Color(red: 0.22, green: 0.48, blue: 0.72) : Color(red: 0.78, green: 0.38, blue: 0.28))
@@ -263,6 +271,7 @@ struct ContentView: View {
                 .padding(.vertical, 9)
                 .background(.white.opacity(0.72))
                 .clipShape(Capsule())
+                .fixedSize(horizontal: true, vertical: false)
             }
 
             Button {
@@ -481,170 +490,172 @@ private struct SettingsView: View {
 
             Divider()
 
-            Form {
-                Section("Runtime") {
-                    Picker("Mode", selection: $runtimeController.runtimeMode) {
-                        ForEach(RuntimeMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-
-                    if runtimeController.isManagedMode {
-                        TextField("Image", text: $runtimeController.managedContainerImage)
-                        TextField("Container name", text: $runtimeController.managedContainerName)
-                        TextField("Model name", text: $runtimeController.managedModelName)
-                        SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
-                        Toggle("Use Vertex AI", isOn: $runtimeController.managedUseVertexAI)
-
-                        if runtimeController.managedUseVertexAI {
-                            TextField("Google Cloud project", text: $runtimeController.managedGoogleCloudProject)
-                            TextField("Google Cloud location", text: $runtimeController.managedGoogleCloudLocation)
-                        }
-
-                        if !runtimeController.isManagedRuntimeConfigured {
-                            Text(runtimeController.runtimeStatusDetail)
-                                .font(.system(.footnote, design: .rounded))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        HStack {
-                            Text("Runtime endpoint")
-                            Spacer()
-                            Text(runtimeController.computedEndpointURL)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.trailing)
-                        }
-
-                        HStack {
-                            Text("Container port")
-                            Spacer()
-                            Text("8000")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        HStack(alignment: .top, spacing: 12) {
-                            Text("User folder")
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 8) {
-                                Text(runtimeController.managedUserFolderPath)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
-                                    .textSelection(.enabled)
-
-                                Button("Open in Finder") {
-                                    openManagedUserFolder()
-                                }
+            ScrollView {
+                Form {
+                    Section("Runtime") {
+                        Picker("Mode", selection: $runtimeController.runtimeMode) {
+                            ForEach(RuntimeMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
                             }
                         }
 
+                        if runtimeController.isManagedMode {
+                            TextField("Image", text: $runtimeController.managedContainerImage)
+                            TextField("Container name", text: $runtimeController.managedContainerName)
+                            TextField("Model name", text: $runtimeController.managedModelName)
+                            SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
+                            Toggle("Use Vertex AI", isOn: $runtimeController.managedUseVertexAI)
+
+                            if runtimeController.managedUseVertexAI {
+                                TextField("Google Cloud project", text: $runtimeController.managedGoogleCloudProject)
+                                TextField("Google Cloud location", text: $runtimeController.managedGoogleCloudLocation)
+                            }
+
+                            if !runtimeController.isManagedRuntimeConfigured {
+                                Text(runtimeController.runtimeStatusDetail)
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            HStack {
+                                Text("Runtime endpoint")
+                                Spacer()
+                                Text(runtimeController.computedEndpointURL)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+
+                            HStack {
+                                Text("Container port")
+                                Spacer()
+                                Text("8000")
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            HStack(alignment: .top, spacing: 12) {
+                                Text("User folder")
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 8) {
+                                    Text(runtimeController.managedUserFolderPath)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.trailing)
+                                        .textSelection(.enabled)
+
+                                    Button("Open in Finder") {
+                                        openManagedUserFolder()
+                                    }
+                                }
+                            }
+
+                            HStack {
+                                Text("Runtime status")
+                                Spacer()
+                                Text(runtimeController.runtimeStatusDetail)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+
+                            HStack(spacing: 12) {
+                                Button("Start") {
+                                    startRuntimeAction()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(runtimeController.isRuntimeActionDisabled)
+
+                                Button("Stop") {
+                                    stopRuntimeAction()
+                                }
+                                .disabled(runtimeController.isRuntimeActionDisabled)
+
+                                Button("Restart") {
+                                    restartRuntimeAction()
+                                }
+                                .disabled(runtimeController.isRuntimeActionDisabled)
+                            }
+
+                            if let lastRuntimeError = runtimeController.lastRuntimeError {
+                                Text(lastRuntimeError)
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
+                            }
+
+                            if !runtimeController.recentLogs.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Recent container logs")
+                                        .font(.system(.footnote, design: .rounded).weight(.semibold))
+
+                                    ScrollView {
+                                        Text(runtimeController.recentLogs)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .textSelection(.enabled)
+                                    }
+                                    .frame(minHeight: 120)
+                                }
+                            }
+                        }
+                    }
+
+                    Section("Connection") {
+                        if runtimeController.isManagedMode {
+                            HStack {
+                                Text("Endpoint URL")
+                                Spacer()
+                                Text(runtimeController.computedEndpointURL)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        } else {
+                            TextField("Endpoint URL", text: $agentController.endpointURL)
+                        }
+
+                        TextField("Session ID", text: $agentController.sessionID)
+
                         HStack {
-                            Text("Runtime status")
+                            Text("Status")
                             Spacer()
-                            Text(runtimeController.runtimeStatusDetail)
+                            Text(agentController.connectionStatus)
                                 .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.trailing)
                         }
 
                         HStack(spacing: 12) {
-                            Button("Start") {
-                                startRuntimeAction()
+                            Button(agentController.isConnected ? "Reconnect" : "Connect") {
+                                connectAction()
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(runtimeController.isRuntimeActionDisabled)
 
-                            Button("Stop") {
-                                stopRuntimeAction()
+                            Button("Disconnect") {
+                                agentController.disconnect()
                             }
-                            .disabled(runtimeController.isRuntimeActionDisabled)
-
-                            Button("Restart") {
-                                restartRuntimeAction()
-                            }
-                            .disabled(runtimeController.isRuntimeActionDisabled)
-                        }
-
-                        if let lastRuntimeError = runtimeController.lastRuntimeError {
-                            Text(lastRuntimeError)
-                                .font(.system(.footnote, design: .rounded))
-                                .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
-                        }
-
-                        if !runtimeController.recentLogs.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Recent container logs")
-                                    .font(.system(.footnote, design: .rounded).weight(.semibold))
-
-                                ScrollView {
-                                    Text(runtimeController.recentLogs)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .textSelection(.enabled)
-                                }
-                                .frame(minHeight: 120)
-                            }
+                            .disabled(!agentController.isConnected)
                         }
                     }
-                }
 
-                Section("Connection") {
-                    if runtimeController.isManagedMode {
-                        HStack {
-                            Text("Endpoint URL")
-                            Spacer()
-                            Text(runtimeController.computedEndpointURL)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.trailing)
-                        }
-                    } else {
-                        TextField("Endpoint URL", text: $agentController.endpointURL)
+                    Section("Playback") {
+                        Toggle("Speak assistant replies aloud", isOn: $autoSpeakAgentReplies)
                     }
 
-                    TextField("Session ID", text: $agentController.sessionID)
-
-                    HStack {
-                        Text("Status")
-                        Spacer()
-                        Text(agentController.connectionStatus)
+                    Section("System") {
+                        Toggle("Prevent system sleep", isOn: $preventSystemSleep)
+                        Text("Keep the Mac awake while Glosos is running so background services remain active when you are away.")
+                            .font(.system(.footnote, design: .rounded))
                             .foregroundStyle(.secondary)
                     }
 
-                    HStack(spacing: 12) {
-                        Button(agentController.isConnected ? "Reconnect" : "Connect") {
-                            connectAction()
+                    Section("Speech") {
+                        Picker("Language", selection: $speechController.selectedLanguage) {
+                            ForEach(SpeechLanguage.allCases) { language in
+                                Text(language.title).tag(language)
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
 
-                        Button("Disconnect") {
-                            agentController.disconnect()
-                        }
-                        .disabled(!agentController.isConnected)
+                        Text("This setting changes both live speech recognition and synthesized voice playback.")
+                            .font(.system(.footnote, design: .rounded))
+                            .foregroundStyle(.secondary)
                     }
                 }
-
-                Section("Playback") {
-                    Toggle("Speak assistant replies aloud", isOn: $autoSpeakAgentReplies)
-                }
-
-                Section("System") {
-                    Toggle("Prevent system sleep", isOn: $preventSystemSleep)
-                    Text("Keep the Mac awake while Glosos is running so background services remain active when you are away.")
-                        .font(.system(.footnote, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Speech") {
-                    Picker("Language", selection: $speechController.selectedLanguage) {
-                        ForEach(SpeechLanguage.allCases) { language in
-                            Text(language.title).tag(language)
-                        }
-                    }
-
-                    Text("This setting changes both live speech recognition and synthesized voice playback.")
-                        .font(.system(.footnote, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
+                .formStyle(.grouped)
             }
-            .formStyle(.grouped)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.ultraThinMaterial)
