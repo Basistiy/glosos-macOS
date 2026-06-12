@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AuthenticationServices
 
 public struct AuthView: View {
     @ObservedObject var authManager: AuthManager
@@ -168,6 +169,30 @@ public struct AuthView: View {
                     .buttonStyle(.plain)
                     .disabled(authManager.isLoading)
                     .opacity(authManager.isLoading ? 0.7 : 1.0)
+
+                    HStack {
+                        Color.black.opacity(0.1)
+                            .frame(height: 1)
+                        Text("or")
+                            .font(.system(.footnote, design: .rounded))
+                            .foregroundStyle(Color.black.opacity(0.3))
+                        Color.black.opacity(0.1)
+                            .frame(height: 1)
+                    }
+                    .padding(.vertical, 4)
+
+                    SignInWithAppleButton(
+                        onRequest: { request in
+                            request.requestedScopes = [.fullName, .email]
+                        },
+                        onCompletion: { result in
+                            handleAppleSignInCompletion(result)
+                        }
+                    )
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 40)
+                    .cornerRadius(10)
+                    .disabled(authManager.isLoading)
                 }
                 .padding(24)
                 .background(.white.opacity(0.82))
@@ -258,6 +283,53 @@ public struct AuthView: View {
             _ = await authManager.register(username: trimmedUser, password: trimmedPass)
         } else {
             _ = await authManager.login(username: trimmedUser, password: trimmedPass)
+        }
+    }
+
+    private func handleAppleSignInCompletion(_ result: Result<ASAuthorization, Error>) {
+        localError = nil
+        authManager.clearError()
+
+        switch result {
+        case .success(let authorization):
+            if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
+                let userIdentifier = appleIDCredential.user
+                let firstName = appleIDCredential.fullName?.givenName
+                let lastName = appleIDCredential.fullName?.familyName
+                let email = appleIDCredential.email
+
+                guard let identityTokenData = appleIDCredential.identityToken,
+                      let identityTokenString = String(data: identityTokenData, encoding: .utf8) else {
+                    localError = "Apple Sign In: Missing identity token."
+                    return
+                }
+
+                let authCodeString: String?
+                if let authCodeData = appleIDCredential.authorizationCode {
+                    authCodeString = String(data: authCodeData, encoding: .utf8)
+                } else {
+                    authCodeString = nil
+                }
+
+                Task {
+                    _ = await authManager.loginWithApple(
+                        identityToken: identityTokenString,
+                        authorizationCode: authCodeString,
+                        userIdentifier: userIdentifier,
+                        firstName: firstName,
+                        lastName: lastName,
+                        email: email
+                    )
+                }
+            } else {
+                localError = "Apple Sign In failed: Unsupported credential type."
+            }
+        case .failure(let error):
+            let nsError = error as NSError
+            if nsError.domain == ASAuthorizationErrorDomain && nsError.code == ASAuthorizationError.canceled.rawValue {
+                return
+            }
+            localError = "Apple Sign In failed: \(error.localizedDescription)"
         }
     }
 }

@@ -204,4 +204,120 @@ struct AuthManagerTests {
         #expect(KeychainHelper.get(account: "current_user_token") == nil)
         #expect(mockDefaults.data(forKey: "currentUserInfo") == nil)
     }
+
+    @Test
+    @MainActor
+    func loginWithAppleSuccessfulStoresCredentialsAndToken() async throws {
+        KeychainHelper.delete(account: "current_user_token")
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+
+        let expectedUser = AuthUser(id: 99, username: "apple_user")
+        let responsePayload = AuthResponse(
+            message: "Apple login successful",
+            token: "apple-jwt-token-xyz",
+            user: expectedUser
+        )
+        let responseData = try JSONEncoder().encode(responsePayload)
+
+        MockURLProtocol.requestHandler = { request in
+            #expect(request.url?.path == "/api/auth/apple")
+            #expect(request.httpMethod == "POST")
+
+            if let bodyData = request.httpBody {
+                let decodedRequest = try? JSONDecoder().decode(AppleAuthRequest.self, from: bodyData)
+                #expect(decodedRequest?.identityToken == "mock-identity-token")
+                #expect(decodedRequest?.userIdentifier == "mock-user-id")
+                #expect(decodedRequest?.firstName == "Jane")
+                #expect(decodedRequest?.lastName == "Doe")
+                #expect(decodedRequest?.email == "jane.doe@example.com")
+            }
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseData)
+        }
+
+        let success = await manager.loginWithApple(
+            identityToken: "mock-identity-token",
+            authorizationCode: "mock-auth-code",
+            userIdentifier: "mock-user-id",
+            firstName: "Jane",
+            lastName: "Doe",
+            email: "jane.doe@example.com"
+        )
+
+        #expect(success)
+        #expect(manager.user == expectedUser)
+        #expect(manager.token == "apple-jwt-token-xyz")
+        #expect(manager.error == nil)
+
+        // Verify storage
+        #expect(KeychainHelper.get(account: "current_user_token") == "apple-jwt-token-xyz")
+        if let storedData = mockDefaults.data(forKey: "currentUserInfo"),
+           let storedUser = try? JSONDecoder().decode(AuthUser.self, from: storedData) {
+            #expect(storedUser == expectedUser)
+        } else {
+            Issue.record("User not saved in UserDefaults")
+        }
+
+        // Clean up
+        KeychainHelper.delete(account: "current_user_token")
+    }
+
+    @Test
+    @MainActor
+    func loginWithAppleFailureSetsErrorState() async throws {
+        KeychainHelper.delete(account: "current_user_token")
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+
+        let errorPayload = AuthErrorResponse(error: "Invalid Apple identity token")
+        let responseData = try JSONEncoder().encode(errorPayload)
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 400,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseData)
+        }
+
+        let success = await manager.loginWithApple(
+            identityToken: "invalid-token",
+            authorizationCode: nil,
+            userIdentifier: "mock-user-id",
+            firstName: nil,
+            lastName: nil,
+            email: nil
+        )
+
+        #expect(!success)
+        #expect(manager.user == nil)
+        #expect(manager.token == nil)
+        #expect(manager.error == "Invalid Apple identity token")
+        #expect(KeychainHelper.get(account: "current_user_token") == nil)
+    }
 }

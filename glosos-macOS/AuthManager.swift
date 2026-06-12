@@ -128,6 +128,89 @@ public final class AuthManager: ObservableObject {
         )
     }
 
+    public func loginWithApple(
+        identityToken: String,
+        authorizationCode: String?,
+        userIdentifier: String,
+        firstName: String?,
+        lastName: String?,
+        email: String?
+    ) async -> Bool {
+        isLoading = true
+        error = nil
+
+        guard var endpointUrl = URL(string: signalingAPIEndpoint) else {
+            self.error = "Invalid API Endpoint URL"
+            self.isLoading = false
+            return false
+        }
+        
+        if #available(macOS 13.0, *) {
+            endpointUrl = endpointUrl.appending(path: "/auth/apple")
+        } else {
+            endpointUrl = endpointUrl.appendingPathComponent("/auth/apple")
+        }
+
+        var request = URLRequest(url: endpointUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let requestBody = AppleAuthRequest(
+            identityToken: identityToken,
+            authorizationCode: authorizationCode,
+            userIdentifier: userIdentifier,
+            firstName: firstName,
+            lastName: lastName,
+            email: email
+        )
+
+        guard let httpBody = try? JSONEncoder().encode(requestBody) else {
+            self.error = "Failed to encode request parameters"
+            self.isLoading = false
+            return false
+        }
+        request.httpBody = httpBody
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                self.error = "Invalid server response"
+                self.isLoading = false
+                return false
+            }
+
+            if (200..<300).contains(httpResponse.statusCode) {
+                let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+
+                // Save user to UserDefaults
+                if let userData = try? JSONEncoder().encode(authResponse.user) {
+                    userDefaults.set(userData, forKey: Self.currentUserInfoKey)
+                }
+
+                // Save token to Keychain
+                KeychainHelper.save(token: authResponse.token, account: Self.tokenAccountKey)
+
+                self.user = authResponse.user
+                self.token = authResponse.token
+                self.isLoading = false
+                return true
+            } else {
+                if let errorResponse = try? JSONDecoder().decode(AuthErrorResponse.self, from: data) {
+                    self.error = errorResponse.error
+                } else {
+                    self.error = "Request failed with status code \(httpResponse.statusCode)"
+                }
+                self.isLoading = false
+                return false
+            }
+        } catch {
+            self.error = "Network error: \(error.localizedDescription)"
+            self.isLoading = false
+            return false
+        }
+    }
+
     public func logout() {
         self.user = nil
         self.token = nil

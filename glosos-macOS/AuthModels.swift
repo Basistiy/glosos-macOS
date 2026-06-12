@@ -36,3 +36,28 @@ public struct AuthErrorResponse: Codable, Equatable {
         self.error = error
     }
 }
+
+public struct AppleAuthRequest: Codable, Equatable {
+    public let identityToken: String
+    public let authorizationCode: String?
+    public let userIdentifier: String
+    public let firstName: String?
+    public let lastName: String?
+    public let email: String?
+
+    public init(
+        identityToken: String,
+        authorizationCode: String?,
+        userIdentifier: String,
+        firstName: String?,
+        lastName: String?,
+        email: String?
+    ) {
+        self.identityToken = identityToken
+        self.authorizationCode = authorizationCode
+        self.userIdentifier = userIdentifier
+        self.firstName = firstName
+        self.lastName = lastName
+        self.email = email
+    }
+}
