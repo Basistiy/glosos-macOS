@@ -190,10 +190,6 @@ struct ContentView: View {
                 Text("Glosos")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
-
-                Text("Voice chat")
-                    .font(.system(.subheadline, design: .rounded))
-                    .foregroundStyle(Color.black.opacity(0.5))
             }
 
             Spacer()
