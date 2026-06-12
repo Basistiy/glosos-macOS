@@ -15,6 +15,7 @@ struct ContentView: View {
     @StateObject private var runtimeController = LocalRuntimeController()
     @StateObject private var p2pController = P2PConnectionController()
     @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
+    @AppStorage("preventSystemSleep") private var preventSystemSleep = false
     @State private var isShowingSettings = false
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
@@ -37,6 +38,7 @@ struct ContentView: View {
                             agentController: agentController,
                             runtimeController: runtimeController,
                             autoSpeakAgentReplies: $autoSpeakAgentReplies,
+                            preventSystemSleep: $preventSystemSleep,
                             connectAction: { Task { await connectUsingSelectedRuntime() } },
                             startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
                             stopRuntimeAction: { Task { await stopManagedRuntime() } },
@@ -116,6 +118,9 @@ struct ContentView: View {
                 }
                 .onChange(of: speechController.isSpeakersMuted) { _, isMuted in
                     p2pController.setSpeakersMuted(isMuted)
+                }
+                .onChange(of: preventSystemSleep) { _, newValue in
+                    PowerAssertionManager.shared.updateAssertion(shouldPreventSleep: newValue)
                 }
                 .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
                     sendPendingUtteranceIfPossible()
@@ -502,6 +507,8 @@ struct ContentView: View {
 
         hasInitialized = true
         
+        PowerAssertionManager.shared.updateAssertion(shouldPreventSleep: preventSystemSleep)
+        
         // Setup WebRTC audio callbacks
         speechController.agentResponsesDirectoryURL = runtimeController.managedUserFolderURL
         speechController.onSynthesizedFile = { [weak p2pController] fileURL, completion in
@@ -734,6 +741,7 @@ private struct SettingsView: View {
     @ObservedObject var agentController: AgentConnectionController
     @ObservedObject var runtimeController: LocalRuntimeController
     @Binding var autoSpeakAgentReplies: Bool
+    @Binding var preventSystemSleep: Bool
     let connectAction: () -> Void
     let startRuntimeAction: () -> Void
     let stopRuntimeAction: () -> Void
@@ -901,6 +909,13 @@ private struct SettingsView: View {
 
                 Section("Playback") {
                     Toggle("Speak assistant replies aloud", isOn: $autoSpeakAgentReplies)
+                }
+
+                Section("System") {
+                    Toggle("Prevent system sleep", isOn: $preventSystemSleep)
+                    Text("Keep the Mac awake while Glosos is running so background services remain active when you are away.")
+                        .font(.system(.footnote, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Speech") {
