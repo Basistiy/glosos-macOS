@@ -503,12 +503,21 @@ private struct SettingsView: View {
                             TextField("Image", text: $runtimeController.managedContainerImage)
                             TextField("Container name", text: $runtimeController.managedContainerName)
                             TextField("Model name", text: $runtimeController.managedModelName)
-                            SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
-                            Toggle("Use Vertex AI", isOn: $runtimeController.managedUseVertexAI)
+                            Picker("Provider", selection: $runtimeController.managedModelProvider) {
+                                ForEach(ModelProvider.allCases) { provider in
+                                    Text(provider.title).tag(provider)
+                                }
+                            }
 
-                            if runtimeController.managedUseVertexAI {
+                            switch runtimeController.managedModelProvider {
+                            case .gemini:
+                                SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
+                            case .vertexAI:
                                 TextField("Google Cloud project", text: $runtimeController.managedGoogleCloudProject)
                                 TextField("Google Cloud location", text: $runtimeController.managedGoogleCloudLocation)
+                            case .localOpenAI:
+                                TextField("Local API Base URL", text: $runtimeController.managedLocalLLMApiBase)
+                                SecureField("API Key (optional)", text: $runtimeController.managedLocalLLMApiKey)
                             }
 
                             if !runtimeController.isManagedRuntimeConfigured {
