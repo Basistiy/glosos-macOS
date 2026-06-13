@@ -203,10 +203,8 @@ final class LocalRuntimeController: ObservableObject {
     private static let managedLocalLLMApiBaseKey = "managedLocalLLMApiBase"
     private static let managedLocalLLMApiKeyKey = "managedLocalLLMApiKey"
     private static let agentEndpointURLKey = "agentEndpointURL"
-    private static let legacyAgentSocketURLKey = "agentSocketURL"
     private static let legacyManualRuntimeMode = "manualWebSocket"
     private static let defaultManualEndpointURL = AgentEndpoint.defaultLocalBaseURLString
-    private static let legacyDefaultManualSocketURL = "ws://127.0.0.1:18000/ws"
     private static let runtimeHealthTimeoutSeconds: TimeInterval = 20
 
     init(
@@ -478,12 +476,6 @@ final class LocalRuntimeController: ObservableObject {
     private static func savedManualEndpointString(in userDefaults: UserDefaults) -> String? {
         if let savedEndpoint = userDefaults.string(forKey: agentEndpointURLKey),
            let normalized = AgentEndpoint.normalizedString(from: savedEndpoint) {
-            return normalized
-        }
-
-        if let legacySocketURL = userDefaults.string(forKey: legacyAgentSocketURLKey),
-           legacySocketURL != legacyDefaultManualSocketURL,
-           let normalized = AgentEndpoint.normalizedString(from: legacySocketURL) {
             return normalized
         }
 
