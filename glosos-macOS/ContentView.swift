@@ -471,6 +471,34 @@ private struct SettingsView: View {
     let restartRuntimeAction: () -> Void
     let closeAction: () -> Void
 
+    // Presets
+    private let geminiPresets = [
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+        "gemini-1.0-pro"
+    ]
+    
+    private let localBasePresets = [
+        "http://192.168.64.1:11434/v1": "Ollama (VM Bridge)",
+        "http://192.168.64.1:1234/v1": "LM Studio (VM Bridge)",
+        "http://localhost:11434/v1": "Ollama (Localhost)",
+        "http://localhost:1234/v1": "LM Studio (Localhost)"
+    ]
+    
+    private let localModelPresets = [
+        "llama3",
+        "llama3:8b",
+        "mistral",
+        "gemma2",
+        "phi3"
+    ]
+
+    @State private var geminiModelSelection: String = ""
+    @State private var localBaseSelection: String = ""
+    @State private var localModelSelection: String = ""
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
@@ -500,9 +528,6 @@ private struct SettingsView: View {
                         }
 
                         if runtimeController.isManagedMode {
-                            TextField("Image", text: $runtimeController.managedContainerImage)
-                            TextField("Container name", text: $runtimeController.managedContainerName)
-                            TextField("Model name", text: $runtimeController.managedModelName)
                             Picker("Provider", selection: $runtimeController.managedModelProvider) {
                                 ForEach(ModelProvider.allCases) { provider in
                                     Text(provider.title).tag(provider)
@@ -511,13 +536,46 @@ private struct SettingsView: View {
 
                             switch runtimeController.managedModelProvider {
                             case .gemini:
+                                Picker("Model name", selection: $geminiModelSelection) {
+                                    ForEach(geminiPresets, id: \.self) { preset in
+                                        Text(preset).tag(preset)
+                                    }
+                                    Text("Custom...").tag("custom")
+                                }
+                                .pickerStyle(.menu)
+                                
+                                if geminiModelSelection == "custom" {
+                                    TextField("Custom Model Name", text: $runtimeController.managedModelName)
+                                }
+
                                 SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
-                            case .vertexAI:
-                                TextField("Google Cloud project", text: $runtimeController.managedGoogleCloudProject)
-                                TextField("Google Cloud location", text: $runtimeController.managedGoogleCloudLocation)
+
                             case .localOpenAI:
-                                TextField("Local API Base URL", text: $runtimeController.managedLocalLLMApiBase)
+                                Picker("API Base URL", selection: $localBaseSelection) {
+                                    ForEach(localBasePresets.keys.sorted(), id: \.self) { key in
+                                        Text(localBasePresets[key] ?? "").tag(key)
+                                    }
+                                    Text("Custom URL...").tag("custom")
+                                }
+                                .pickerStyle(.menu)
+                                
+                                if localBaseSelection == "custom" {
+                                    TextField("Custom API Base URL", text: $runtimeController.managedLocalLLMApiBase)
+                                }
+
                                 SecureField("API Key (optional)", text: $runtimeController.managedLocalLLMApiKey)
+
+                                Picker("Model name", selection: $localModelSelection) {
+                                    ForEach(localModelPresets, id: \.self) { preset in
+                                        Text(preset).tag(preset)
+                                    }
+                                    Text("Custom Model...").tag("custom")
+                                }
+                                .pickerStyle(.menu)
+
+                                if localModelSelection == "custom" {
+                                    TextField("Custom Model Name", text: $runtimeController.managedModelName)
+                                }
                             }
 
                             if !runtimeController.isManagedRuntimeConfigured {
@@ -602,6 +660,11 @@ private struct SettingsView: View {
                                     .frame(minHeight: 120)
                                 }
                             }
+
+                            DisclosureGroup("Advanced Container Settings") {
+                                TextField("Image URL", text: $runtimeController.managedContainerImage)
+                                TextField("Container name", text: $runtimeController.managedContainerName)
+                            }
                         }
                     }
 
@@ -673,6 +736,27 @@ private struct SettingsView: View {
             runtimeController.saveSettings()
             agentController.saveSettings()
         }
+        .onAppear {
+            syncPresetsWithController()
+        }
+        .onChange(of: runtimeController.managedModelProvider) { _, _ in
+            syncPresetsWithController()
+        }
+        .onChange(of: geminiModelSelection) { _, newValue in
+            if newValue != "custom" {
+                runtimeController.managedModelName = newValue
+            }
+        }
+        .onChange(of: localModelSelection) { _, newValue in
+            if newValue != "custom" {
+                runtimeController.managedModelName = newValue
+            }
+        }
+        .onChange(of: localBaseSelection) { _, newValue in
+            if newValue != "custom" {
+                runtimeController.managedLocalLLMApiBase = newValue
+            }
+        }
     }
 
     private func openManagedUserFolder() {
@@ -689,6 +773,26 @@ private struct SettingsView: View {
         }
 
         NSWorkspace.shared.open(userFolderURL)
+    }
+
+    private func syncPresetsWithController() {
+        if geminiPresets.contains(runtimeController.managedModelName) {
+            geminiModelSelection = runtimeController.managedModelName
+        } else {
+            geminiModelSelection = "custom"
+        }
+        
+        if localBasePresets.keys.contains(runtimeController.managedLocalLLMApiBase) {
+            localBaseSelection = runtimeController.managedLocalLLMApiBase
+        } else {
+            localBaseSelection = "custom"
+        }
+
+        if localModelPresets.contains(runtimeController.managedModelName) {
+            localModelSelection = runtimeController.managedModelName
+        } else {
+            localModelSelection = "custom"
+        }
     }
 }
 

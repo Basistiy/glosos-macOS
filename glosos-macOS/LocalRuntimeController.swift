@@ -2,7 +2,7 @@
 //  LocalRuntimeController.swift
 //  glosos-macOS
 //
-//  Created by Codex on 6/5/26.
+//  Created by EV on 6/5/26.
 //
 
 import Combine
@@ -26,7 +26,6 @@ enum RuntimeMode: String, CaseIterable, Identifiable {
 
 enum ModelProvider: String, CaseIterable, Identifiable {
     case gemini
-    case vertexAI
     case localOpenAI
 
     var id: String { rawValue }
@@ -35,8 +34,6 @@ enum ModelProvider: String, CaseIterable, Identifiable {
         switch self {
         case .gemini:
             return "Google Gemini"
-        case .vertexAI:
-            return "Google Vertex AI"
         case .localOpenAI:
             return "Local LLM (OpenAI SDK / Ollama)"
         }
@@ -70,8 +67,6 @@ struct ManagedContainerConfiguration: Equatable {
     let modelName: String
     let modelProvider: ModelProvider
     let googleAPIKey: String?
-    let googleCloudProject: String?
-    let googleCloudLocation: String?
     let localLLMApiBase: String?
     let localLLMApiKey: String?
 
@@ -86,14 +81,6 @@ struct ManagedContainerConfiguration: Equatable {
             variables.append("GOOGLE_GENAI_USE_VERTEXAI=false")
             if let googleAPIKey {
                 variables.append("GOOGLE_API_KEY=\(googleAPIKey)")
-            }
-        case .vertexAI:
-            variables.append("GOOGLE_GENAI_USE_VERTEXAI=true")
-            if let googleCloudProject {
-                variables.append("GOOGLE_CLOUD_PROJECT=\(googleCloudProject)")
-            }
-            if let googleCloudLocation {
-                variables.append("GOOGLE_CLOUD_LOCATION=\(googleCloudLocation)")
             }
         case .localOpenAI:
             if let localLLMApiBase {
@@ -183,18 +170,6 @@ final class LocalRuntimeController: ObservableObject {
         }
     }
 
-    @Published var managedGoogleCloudProject: String {
-        didSet {
-            userDefaults.set(managedGoogleCloudProject, forKey: Self.managedGoogleCloudProjectKey)
-        }
-    }
-
-    @Published var managedGoogleCloudLocation: String {
-        didSet {
-            userDefaults.set(managedGoogleCloudLocation, forKey: Self.managedGoogleCloudLocationKey)
-        }
-    }
-
     @Published var managedLocalLLMApiBase: String {
         didSet {
             userDefaults.set(managedLocalLLMApiBase, forKey: Self.managedLocalLLMApiBaseKey)
@@ -225,9 +200,6 @@ final class LocalRuntimeController: ObservableObject {
     private static let managedModelNameKey = "managedModelName"
     private static let managedGoogleAPIKeyKey = "managedGoogleAPIKey"
     private static let managedModelProviderKey = "managedModelProvider"
-    private static let managedUseVertexAIKey = "managedUseVertexAI"
-    private static let managedGoogleCloudProjectKey = "managedGoogleCloudProject"
-    private static let managedGoogleCloudLocationKey = "managedGoogleCloudLocation"
     private static let managedLocalLLMApiBaseKey = "managedLocalLLMApiBase"
     private static let managedLocalLLMApiKeyKey = "managedLocalLLMApiKey"
     private static let agentEndpointURLKey = "agentEndpointURL"
@@ -279,20 +251,10 @@ final class LocalRuntimeController: ObservableObject {
         if let savedProvider = userDefaults.string(forKey: Self.managedModelProviderKey),
            let provider = ModelProvider(rawValue: savedProvider) {
             self.managedModelProvider = provider
-        } else if userDefaults.object(forKey: Self.managedUseVertexAIKey) != nil {
-            let useVertex = userDefaults.bool(forKey: Self.managedUseVertexAIKey)
-            self.managedModelProvider = useVertex ? .vertexAI : .gemini
         } else {
-            let useVertex = Self.environmentBoolean(named: "GOOGLE_GENAI_USE_VERTEXAI")
-            self.managedModelProvider = useVertex ? .vertexAI : .gemini
+            self.managedModelProvider = .gemini
         }
 
-        self.managedGoogleCloudProject = userDefaults.string(forKey: Self.managedGoogleCloudProjectKey)
-            ?? ProcessInfo.processInfo.environment["GOOGLE_CLOUD_PROJECT"]
-            ?? ""
-        self.managedGoogleCloudLocation = userDefaults.string(forKey: Self.managedGoogleCloudLocationKey)
-            ?? ProcessInfo.processInfo.environment["GOOGLE_CLOUD_LOCATION"]
-            ?? ""
         self.managedLocalLLMApiBase = userDefaults.string(forKey: Self.managedLocalLLMApiBaseKey)
             ?? "http://192.168.64.1:11434/v1"
         self.managedLocalLLMApiKey = userDefaults.string(forKey: Self.managedLocalLLMApiKeyKey)
@@ -334,8 +296,6 @@ final class LocalRuntimeController: ObservableObject {
         userDefaults.set(managedModelName, forKey: Self.managedModelNameKey)
         userDefaults.set(managedGoogleAPIKey, forKey: Self.managedGoogleAPIKeyKey)
         userDefaults.set(managedModelProvider.rawValue, forKey: Self.managedModelProviderKey)
-        userDefaults.set(managedGoogleCloudProject, forKey: Self.managedGoogleCloudProjectKey)
-        userDefaults.set(managedGoogleCloudLocation, forKey: Self.managedGoogleCloudLocationKey)
         userDefaults.set(managedLocalLLMApiBase, forKey: Self.managedLocalLLMApiBaseKey)
         userDefaults.set(managedLocalLLMApiKey, forKey: Self.managedLocalLLMApiKeyKey)
     }
@@ -469,8 +429,6 @@ final class LocalRuntimeController: ObservableObject {
         let containerName = managedContainerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelName = managedModelName.trimmingCharacters(in: .whitespacesAndNewlines)
         let googleAPIKey = managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let googleCloudProject = managedGoogleCloudProject.trimmingCharacters(in: .whitespacesAndNewlines)
-        let googleCloudLocation = managedGoogleCloudLocation.trimmingCharacters(in: .whitespacesAndNewlines)
         let localLLMApiBase = managedLocalLLMApiBase.trimmingCharacters(in: .whitespacesAndNewlines)
         let localLLMApiKey = managedLocalLLMApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -483,8 +441,6 @@ final class LocalRuntimeController: ObservableObject {
         switch managedModelProvider {
         case .gemini:
             guard !googleAPIKey.isEmpty else { return nil }
-        case .vertexAI:
-            guard !googleCloudProject.isEmpty, !googleCloudLocation.isEmpty else { return nil }
         case .localOpenAI:
             guard !localLLMApiBase.isEmpty else { return nil }
         }
@@ -496,8 +452,6 @@ final class LocalRuntimeController: ObservableObject {
             modelName: modelName,
             modelProvider: managedModelProvider,
             googleAPIKey: googleAPIKey.isEmpty ? nil : googleAPIKey,
-            googleCloudProject: googleCloudProject.isEmpty ? nil : googleCloudProject,
-            googleCloudLocation: googleCloudLocation.isEmpty ? nil : googleCloudLocation,
             localLLMApiBase: localLLMApiBase.isEmpty ? nil : localLLMApiBase,
             localLLMApiKey: localLLMApiKey.isEmpty ? nil : localLLMApiKey
         )
@@ -507,8 +461,6 @@ final class LocalRuntimeController: ObservableObject {
         switch managedModelProvider {
         case .gemini:
             return "Enter a valid image, container name, model name, and Google API key for the managed runtime."
-        case .vertexAI:
-            return "Enter a valid image, container name, model name, Google Cloud project, and Google Cloud location for the managed runtime."
         case .localOpenAI:
             return "Enter a valid image, container name, model name, and Local API Base URL for the managed runtime."
         }
@@ -518,8 +470,6 @@ final class LocalRuntimeController: ObservableObject {
         switch managedModelProvider {
         case .gemini:
             return "Managed runtime is waiting for a Google API key."
-        case .vertexAI:
-            return "Managed runtime is waiting for Google Cloud project and location."
         case .localOpenAI:
             return "Managed runtime is waiting for Local API Base URL."
         }

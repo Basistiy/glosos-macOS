@@ -2,8 +2,8 @@
 //  PowerAssertionManager.swift
 //  glosos-macOS
 //
-//  Created by Antigravity on 6/12/26.
-//
+//  Created by EV on 6/12/26.
+// Preventing mac from sleeping when glosos is working
 
 import Foundation
 import Combine
