@@ -10,16 +10,13 @@ import Foundation
 
 enum RuntimeMode: String, CaseIterable, Identifiable {
     case managedAppleContainer
-    case manualEndpoint
-
+    
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .managedAppleContainer:
             return "Managed Container"
-        case .manualEndpoint:
-            return "Manual Endpoint"
         }
     }
 }
@@ -219,21 +216,8 @@ final class LocalRuntimeController: ObservableObject {
         self.assetManager = assetManager
         self.runtimeManager = runtimeManager
         self.healthChecker = healthChecker
+        self.runtimeMode = .managedAppleContainer
 
-        if let savedMode = userDefaults.string(forKey: Self.runtimeModeKey) {
-            if savedMode == Self.legacyManualRuntimeMode {
-                self.runtimeMode = .manualEndpoint
-            } else if let runtimeMode = RuntimeMode(rawValue: savedMode) {
-                self.runtimeMode = runtimeMode
-            } else {
-                self.runtimeMode = .managedAppleContainer
-            }
-        } else if let savedEndpoint = Self.savedManualEndpointString(in: userDefaults),
-                  savedEndpoint != Self.defaultManualEndpointURL {
-            self.runtimeMode = .manualEndpoint
-        } else {
-            self.runtimeMode = .managedAppleContainer
-        }
 
         self.managedContainerImage = userDefaults.string(forKey: Self.managedContainerImageKey)
             ?? "docker.io/evbasistyi/glosos-local-container:latest"
