@@ -473,11 +473,9 @@ private struct SettingsView: View {
 
     // Presets
     private let geminiPresets = [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-1.0-pro"
+        "gemini-3.5-flash",
+        "gemini-3.1-pro",
+        "gemini-3.1-flash-lite"
     ]
     
     private let localBasePresets = [
