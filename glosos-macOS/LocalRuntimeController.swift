@@ -220,9 +220,9 @@ final class LocalRuntimeController: ObservableObject {
 
 
         self.managedContainerImage = userDefaults.string(forKey: Self.managedContainerImageKey)
-            ?? "docker.io/evbasistyi/glosos-local-container:latest"
+            ?? "docker.io/evbasistyi/glosos-google-user:latest"
         self.managedContainerName = userDefaults.string(forKey: Self.managedContainerNameKey)
-            ?? "glosos-local-container-macos"
+            ?? "glosos-google-user-macos"
         self.managedModelName = userDefaults.string(forKey: Self.managedModelNameKey)
             ?? ProcessInfo.processInfo.environment["MODEL_NAME"]
             ?? "gemini-2.5-flash"

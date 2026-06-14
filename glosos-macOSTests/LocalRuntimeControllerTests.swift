@@ -74,7 +74,7 @@ struct LocalRuntimeControllerTests {
         #expect(controller.currentManagedEndpoint == ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000))
         #expect(controller.runtimeStatusDetail == "Running at http://192.168.64.2:8000")
         #expect(prepareCalls == 1)
-        #expect(startInvocation?.configuration.image == "ghcr.io/basistiy/glosos-google-user:latest")
+        #expect(startInvocation?.configuration.image == "docker.io/evbasistyi/glosos-google-user:latest")
         #expect(startInvocation?.configuration.containerName == "glosos-google-user-macos")
         #expect(startInvocation?.configuration.modelName == "gemini-2.5-flash")
         #expect(startInvocation?.configuration.googleAPIKey == "secret")

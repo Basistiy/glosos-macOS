@@ -493,9 +493,15 @@ private struct SettingsView: View {
         "phi3"
     ]
 
+    private let containerImagePresets = [
+        ("docker.io/evbasistyi/glosos-google-user:latest", "Google User (Docker Hub)"),
+        ("docker.io/evbasistyi/glosos-local-container:latest", "Local Container (Docker Hub)"),
+    ]
+
     @State private var geminiModelSelection: String = ""
     @State private var localBaseSelection: String = ""
     @State private var localModelSelection: String = ""
+    @State private var containerImageSelection: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -659,10 +665,19 @@ private struct SettingsView: View {
                                 }
                             }
 
-                            DisclosureGroup("Advanced Container Settings") {
-                                TextField("Image URL", text: $runtimeController.managedContainerImage)
-                                TextField("Container name", text: $runtimeController.managedContainerName)
+                            Picker("Container Image", selection: $containerImageSelection) {
+                                ForEach(containerImagePresets, id: \.0) { preset in
+                                    Text(preset.1).tag(preset.0)
+                                }
+                                Text("Custom...").tag("custom")
                             }
+                            .pickerStyle(.menu)
+                            
+                            if containerImageSelection == "custom" {
+                                TextField("Image URL", text: $runtimeController.managedContainerImage)
+                            }
+                            
+                            TextField("Container name", text: $runtimeController.managedContainerName)
                         }
                     }
 
@@ -755,6 +770,18 @@ private struct SettingsView: View {
                 runtimeController.managedLocalLLMApiBase = newValue
             }
         }
+        .onChange(of: containerImageSelection) { _, newValue in
+            if newValue != "custom" {
+                runtimeController.managedContainerImage = newValue
+                
+                // Automatically sync the container name to avoid configuration mismatches
+                if newValue == "docker.io/evbasistyi/glosos-local-container:latest" {
+                    runtimeController.managedContainerName = "glosos-local-container-macos"
+                } else if newValue == "docker.io/evbasistyi/glosos-google-user:latest" || newValue == "ghcr.io/basistiy/glosos-google-user:latest" {
+                    runtimeController.managedContainerName = "glosos-google-user-macos"
+                }
+            }
+        }
     }
 
     private func openManagedUserFolder() {
@@ -790,6 +817,12 @@ private struct SettingsView: View {
             localModelSelection = runtimeController.managedModelName
         } else {
             localModelSelection = "custom"
+        }
+
+        if containerImagePresets.contains(where: { $0.0 == runtimeController.managedContainerImage }) {
+            containerImageSelection = runtimeController.managedContainerImage
+        } else {
+            containerImageSelection = "custom"
         }
     }
 }
