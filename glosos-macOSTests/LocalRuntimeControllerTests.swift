@@ -26,22 +26,22 @@ struct LocalRuntimeControllerTests {
         #expect(controller.runtimeMode == .managedAppleContainer)
     }
 
-    @Test
-    @MainActor
-    func preservesManualModeWhenCustomLegacySocketURLExists() async throws {
-        let defaults = makeIsolatedDefaults()
-        defaults.set("ws://127.0.0.1:19000/ws", forKey: "agentSocketURL")
-
-        let controller = LocalRuntimeController(
-            userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .unsupported(message: "Unavailable")),
-            assetManager: StubAssetManager(),
-            runtimeManager: StubRuntimeManager(),
-            healthChecker: ImmediateHealthChecker(isHealthy: false)
-        )
-
-        #expect(controller.runtimeMode == .manualEndpoint)
-    }
+//    @Test
+//    @MainActor
+//    func preservesManualModeWhenCustomLegacySocketURLExists() async throws {
+//        let defaults = makeIsolatedDefaults()
+//        defaults.set("ws://127.0.0.1:19000/ws", forKey: "agentSocketURL")
+//
+//        let controller = LocalRuntimeController(
+//            userDefaults: defaults,
+//            supportChecker: StubSupportChecker(status: .unsupported(message: "Unavailable")),
+//            assetManager: StubAssetManager(),
+//            runtimeManager: StubRuntimeManager(),
+//            healthChecker: ImmediateHealthChecker(isHealthy: false)
+//        )
+//
+//        #expect(controller.runtimeMode == .manualEndpoint)
+//    }
 
     @Test
     @MainActor

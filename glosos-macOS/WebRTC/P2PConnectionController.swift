@@ -54,7 +54,12 @@ final class P2PConnectionController: ObservableObject {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200..<300).contains(httpResponse.statusCode) else {
-                print("[P2PConnectionController] Failed to fetch TURN credentials (status code: \( (response as? HTTPURLResponse)?.statusCode ?? 0 ))")
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                print("[P2PConnectionController] Failed to fetch TURN credentials (status code: \(statusCode))")
+                if statusCode == 401 || statusCode == 403 {
+                    print("[P2PConnectionController] Ephemeral TURN credentials retrieval returned \(statusCode). Posting GlososAuthTokenExpired notification.")
+                    NotificationCenter.default.post(name: NSNotification.Name("GlososAuthTokenExpired"), object: nil)
+                }
                 return []
             }
             

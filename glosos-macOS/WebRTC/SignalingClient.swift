@@ -59,8 +59,8 @@ public final class SignalingClient: NSObject {
             print("[SignalingClient] Connecting to \(webSocketURL.absoluteString)...")
             
             let configuration = URLSessionConfiguration.default
-            // Set reasonable timeout
-            configuration.timeoutIntervalForRequest = 30
+            // Set reasonable timeout (increased to 60s to prevent premature timeout during 25s ping intervals)
+            configuration.timeoutIntervalForRequest = 60
             configuration.timeoutIntervalForResource = 300
             
             let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
@@ -141,22 +141,24 @@ public final class SignalingClient: NSObject {
     private func listen() {
         webSocketTask?.receive { [weak self] result in
             guard let self = self else { return }
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    self.handleMessage(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
+            self.queue.async {
+                switch result {
+                case .success(let message):
+                    switch message {
+                    case .string(let text):
                         self.handleMessage(text)
+                    case .data(let data):
+                        if let text = String(data: data, encoding: .utf8) {
+                            self.handleMessage(text)
+                        }
+                    @unknown default:
+                        break
                     }
-                @unknown default:
-                    break
+                    self.listen()
+                case .failure(let error):
+                    print("[SignalingClient] WebSocket read error: \(error.localizedDescription)")
+                    self.handleFailure(error)
                 }
-                self.listen()
-            case .failure(let error):
-                print("[SignalingClient] WebSocket read error: \(error.localizedDescription)")
-                self.handleFailure(error)
             }
         }
     }
@@ -213,6 +215,29 @@ public final class SignalingClient: NSObject {
         } else if firstChar == "1" || text.hasPrefix("41") {
             print("[SignalingClient] Server closed connection: \(text)")
             self.handleDisconnect()
+        } else if text.hasPrefix("44") {
+            print("[SignalingClient] Socket.IO namespace connection error: \(text)")
+            let jsonStartIndex = text.index(text.startIndex, offsetBy: 2)
+            let jsonString = String(text[jsonStartIndex...])
+            
+            var errorMsg = "Signaling connection error"
+            if let data = jsonString.data(using: .utf8),
+               let jsonDict = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+               let message = jsonDict["message"] as? String {
+                errorMsg = message
+            }
+            
+            let error = NSError(domain: "SignalingClient", code: -2, userInfo: [NSLocalizedDescriptionKey: errorMsg])
+            
+            // Post notification if it's an authentication error
+            let lowercased = errorMsg.lowercased()
+            if lowercased.contains("auth") || lowercased.contains("token") || lowercased.contains("expired") || lowercased.contains("invalid") {
+                print("[SignalingClient] Authentication error detected. Posting GlososAuthTokenExpired notification.")
+                NotificationCenter.default.post(name: NSNotification.Name("GlososAuthTokenExpired"), object: nil)
+            }
+            
+            self.isExplicitDisconnect = true
+            self.handleFailure(error)
         }
     }
     
@@ -290,37 +315,40 @@ public final class SignalingClient: NSObject {
     }
     
     private func handleDisconnect() {
-        guard isConnected || webSocketTask != nil else { return }
-        webSocketTask = nil
-        urlSession = nil
-        isConnected = false
-        
-        DispatchQueue.main.async { [weak self] in
+        queue.async { [weak self] in
             guard let self = self else { return }
-            self.delegate?.signalingClientDidDisconnect(self)
-        }
-        
-        // Schedule reconnect if this was an implicit disconnect
-        if !isExplicitDisconnect && reconnectAttempts < maxReconnectAttempts {
-            reconnectAttempts += 1
-            let delay = min(30.0, pow(2.0, Double(reconnectAttempts)))
-            print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) in \(delay) seconds...")
-            
-            reconnectWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self = self else { return }
-                print("[SignalingClient] Attempting reconnect (attempt \(self.reconnectAttempts))...")
-                self.connect()
-            }
-            self.reconnectWorkItem = workItem
-            queue.asyncAfter(deadline: .now() + delay, execute: workItem)
+            guard self.isConnected || self.webSocketTask != nil else { return }
+            self.webSocketTask = nil
+            self.urlSession = nil
+            self.isConnected = false
             
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                self.delegate?.signalingClient(self, willAttemptReconnect: self.reconnectAttempts, delay: delay)
+                self.delegate?.signalingClientDidDisconnect(self)
             }
-        } else if !isExplicitDisconnect {
-            print("[SignalingClient] Max reconnect attempts reached (\(maxReconnectAttempts)). Giving up.")
+            
+            // Schedule reconnect if this was an implicit disconnect
+            if !self.isExplicitDisconnect && self.reconnectAttempts < self.maxReconnectAttempts {
+                self.reconnectAttempts += 1
+                let delay = min(30.0, pow(2.0, Double(self.reconnectAttempts)))
+                print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) in \(delay) seconds...")
+                
+                self.reconnectWorkItem?.cancel()
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self = self else { return }
+                    print("[SignalingClient] Attempting reconnect (attempt \(self.reconnectAttempts))...")
+                    self.connect()
+                }
+                self.reconnectWorkItem = workItem
+                self.queue.asyncAfter(deadline: .now() + delay, execute: workItem)
+                
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.delegate?.signalingClient(self, willAttemptReconnect: self.reconnectAttempts, delay: delay)
+                }
+            } else if !self.isExplicitDisconnect {
+                print("[SignalingClient] Max reconnect attempts reached (\(self.maxReconnectAttempts)). Giving up.")
+            }
         }
     }
     

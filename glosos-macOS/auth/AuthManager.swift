@@ -76,6 +76,8 @@ public final class AuthManager: ObservableObject {
     private static let currentUserInfoKey = "currentUserInfo"
     private static let tokenAccountKey = "current_user_token"
 
+    private var tokenExpiredObserver: Any?
+
     public init(userDefaults: UserDefaults = .standard, urlSession: URLSession = .shared) {
         self.userDefaults = userDefaults
         self.urlSession = urlSession
@@ -85,6 +87,23 @@ public final class AuthManager: ObservableObject {
             ?? "https://glosos.com/api"
 
         restoreSession()
+
+        self.tokenExpiredObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("GlososAuthTokenExpired"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            print("[AuthManager] Auth token expired or invalid. Logging out...")
+            self.logout()
+            self.error = "Session expired. Please log in again."
+        }
+    }
+
+    deinit {
+        if let observer = tokenExpiredObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     public func saveSignalingAPIEndpoint(_ endpoint: String) {
