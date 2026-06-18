@@ -358,6 +358,10 @@ actor StubRuntimeManager: ContainerRuntimeManaging {
         let _ = assets
         stopCalls.append(containerName)
     }
+
+    func deleteImage(reference: String, assets: ContainerRuntimeAssets) async throws {
+        // No-op for testing
+    }
 }
 
 private struct ImmediateHealthChecker: LocalRuntimeHealthChecking {

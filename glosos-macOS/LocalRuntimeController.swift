@@ -184,6 +184,7 @@ final class LocalRuntimeController: ObservableObject {
     @Published private(set) var lastRuntimeError: String?
     @Published private(set) var recentLogs = ""
     @Published private(set) var currentManagedEndpoint: ManagedRuntimeEndpoint?
+    @Published private(set) var detectedContainerVersion: String?
 
     private let userDefaults: UserDefaults
     private let supportChecker: ContainerizationSupportChecking
@@ -324,6 +325,7 @@ final class LocalRuntimeController: ObservableObject {
         lastRuntimeError = nil
         recentLogs = ""
         currentManagedEndpoint = nil
+        detectedContainerVersion = nil
 
         guard case .supported = supportChecker.currentSupportStatus() else {
             applyUnsupportedState()
@@ -358,6 +360,16 @@ final class LocalRuntimeController: ObservableObject {
             currentManagedEndpoint = endpoint
             runtimeState = .running
             runtimeStatusDetail = "Running at \(endpoint.displayString)"
+            
+            // Query version from healthz endpoint
+            Task { [weak self] in
+                if let version = await self?.fetchContainerVersion(from: endpoint) {
+                    await MainActor.run {
+                        self?.detectedContainerVersion = version
+                    }
+                }
+            }
+            
             return true
         } catch let error as RuntimePreparationError {
             switch error {
@@ -399,6 +411,32 @@ final class LocalRuntimeController: ObservableObject {
         runtimeStatusDetail = "Managed container stopped."
         currentManagedEndpoint = nil
         recentLogs = ""
+        detectedContainerVersion = nil
+    }
+
+    func deleteImageCache() async -> Bool {
+        let image = managedContainerImage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !image.isEmpty else { return false }
+        
+        do {
+            let assets: ContainerRuntimeAssets
+            if let existing = try await assetManager.existingAssets() {
+                assets = existing
+            } else {
+                assets = try await assetManager.prepareAssets(updateStatus: { _ in })
+            }
+            
+            try await runtimeManager.deleteImage(reference: image, assets: assets)
+            await MainActor.run {
+                self.runtimeStatusDetail = "Image cache deleted. Next start will pull."
+            }
+            return true
+        } catch {
+            await MainActor.run {
+                self.runtimeStatusDetail = "Failed to delete cache: \(error.localizedDescription)"
+            }
+            return false
+        }
     }
 
     func restartRuntime() async -> Bool {
@@ -547,5 +585,28 @@ final class LocalRuntimeController: ObservableObject {
         }
 
         return ["1", "true", "yes", "on"].contains(value)
+    }
+
+    private func fetchContainerVersion(from endpoint: ManagedRuntimeEndpoint) async -> String? {
+        var request = URLRequest(url: endpoint.agentEndpoint.healthURL)
+        request.timeoutInterval = 2
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                return nil
+            }
+            
+            struct HealthResponse: Codable {
+                let status: String?
+                let version: String?
+            }
+            
+            let health = try JSONDecoder().decode(HealthResponse.self, from: data)
+            return health.version
+        } catch {
+            return nil
+        }
     }
 }

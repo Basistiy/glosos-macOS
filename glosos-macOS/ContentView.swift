@@ -626,6 +626,15 @@ private struct SettingsView: View {
                                     .multilineTextAlignment(.trailing)
                             }
 
+                            if let version = runtimeController.detectedContainerVersion {
+                                HStack {
+                                    Text("Container version")
+                                    Spacer()
+                                    Text(version)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
                             HStack(spacing: 12) {
                                 Button("Start") {
                                     startRuntimeAction()
@@ -678,6 +687,14 @@ private struct SettingsView: View {
                             }
                             
                             TextField("Container name", text: $runtimeController.managedContainerName)
+
+                            Button("Force Pull Image on Next Start") {
+                                Task {
+                                    _ = await runtimeController.deleteImageCache()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(runtimeController.runtimeState != .stopped)
                         }
                     }
 

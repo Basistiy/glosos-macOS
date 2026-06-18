@@ -52,6 +52,10 @@ protocol ContainerRuntimeManaging {
         containerName: String,
         assets: ContainerRuntimeAssets?
     ) async
+    func deleteImage(
+        reference: String,
+        assets: ContainerRuntimeAssets
+    ) async throws
 }
 
 struct ContainerizationSupportChecker: ContainerizationSupportChecking {
@@ -606,6 +610,14 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         try? await session.container.stop()
         try? session.manager.releaseNetwork(containerName)
         self.session = nil
+    }
+
+    func deleteImage(
+        reference: String,
+        assets: ContainerRuntimeAssets
+    ) async throws {
+        let imageStore = try ImageStore(path: assets.imageStoreURL)
+        try await imageStore.delete(reference: reference, performCleanup: true)
     }
 
     nonisolated private static func containerRootURL(
