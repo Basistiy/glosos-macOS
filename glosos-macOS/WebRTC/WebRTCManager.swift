@@ -25,7 +25,11 @@ public final class WebRTCManager: NSObject {
     
     private var localAudioTrack: RTCAudioTrack?
     private var playerNode: AVAudioPlayerNode?
-    private var mixerNode: AVAudioMixerNode?
+    private var micMixerNode: AVAudioMixerNode?
+    private var mainMixerNode: AVAudioMixerNode?
+    private var physicalInputNode: AVAudioNode?
+    private var inputDestinationNode: AVAudioNode?
+    private var inputFormat: AVAudioFormat?
     
     private var activeBuffersCount = 0
     private let bufferLock = NSLock()
@@ -229,7 +233,11 @@ public final class WebRTCManager: NSObject {
         localAudioTrack = nil
         pendingIceCandidates.removeAll()
         playerNode = nil
-        mixerNode = nil
+        micMixerNode = nil
+        mainMixerNode = nil
+        physicalInputNode = nil
+        inputDestinationNode = nil
+        inputFormat = nil
         
         mixerLock.lock()
         outputMixer = nil
@@ -243,7 +251,7 @@ public final class WebRTCManager: NSObject {
     }
     
     public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
-        guard let player = playerNode, let mixer = mixerNode, let engine = player.engine, !buffers.isEmpty else {
+        guard let player = playerNode, let mixer = mainMixerNode, let engine = player.engine, !buffers.isEmpty else {
             completion()
             return
         }
@@ -251,7 +259,7 @@ public final class WebRTCManager: NSObject {
         if let firstBuffer = buffers.first {
             engine.disconnectNodeOutput(player)
             engine.connect(player, to: mixer, format: firstBuffer.format)
-            print("[WebRTCManager] Playing audio buffers with format: \(firstBuffer.format) (reconnected player to mixer)")
+            print("[WebRTCManager] Playing audio buffers with format: \(firstBuffer.format) (reconnected player to mainMixerNode)")
         }
         
         bufferLock.lock()
@@ -285,8 +293,13 @@ public final class WebRTCManager: NSObject {
     }
     
     public func playAudioFile(at url: URL, completion: @escaping () -> Void) {
-        guard let player = playerNode, let engine = player.engine else {
-            print("[WebRTCManager] [Warning] playAudioFile called but playerNode or engine is nil")
+        guard let player = playerNode, 
+              let micMixer = micMixerNode,
+              let mainMixer = mainMixerNode, 
+              let dest = inputDestinationNode, 
+              let format = inputFormat, 
+              let engine = player.engine else {
+            print("[WebRTCManager] [Warning] playAudioFile called but playerNode, micMixerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
             completion()
             return
         }
@@ -295,6 +308,30 @@ public final class WebRTCManager: NSObject {
             let file = try AVAudioFile(forReading: url)
             
             print("[WebRTCManager] Playing resampled audio file with format: \(file.processingFormat)")
+            
+            // Reconnect the entire input graph to ensure it is not in a disconnected state due to engine resets
+            engine.disconnectNodeOutput(player)
+            if let src = physicalInputNode {
+                engine.disconnectNodeOutput(src)
+            }
+            engine.disconnectNodeOutput(micMixer)
+            engine.disconnectNodeOutput(mainMixer)
+            
+            // Reconnect player to mainMixer
+            engine.connect(player, to: mainMixer, format: file.processingFormat)
+            player.volume = 1.0
+            
+            // Reconnect physical microphone to micMixer, and micMixer to mainMixer
+            if let src = physicalInputNode {
+                engine.connect(src, to: micMixer, format: format)
+                micMixer.outputVolume = 0.0
+                engine.connect(micMixer, to: mainMixer, format: format)
+            }
+            
+            // Connect mainMixer to WebRTC input destination
+            engine.connect(mainMixer, to: dest, format: format)
+            
+            print("[WebRTCManager] Reconnected WebRTC input path: player (1.0 vol) & physical microphone (0.0 vol via micMixer) -> mainMixer -> destination")
             
             bufferLock.lock()
             activeBuffersCount = 1
@@ -464,25 +501,34 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
         engine.disconnectNodeInput(destination)
         
         let player = AVAudioPlayerNode()
-        let mixer = AVAudioMixerNode()
+        let micMixer = AVAudioMixerNode()
+        let mainMixer = AVAudioMixerNode()
         
         engine.attach(player)
-        engine.attach(mixer)
+        engine.attach(micMixer)
+        engine.attach(mainMixer)
         
-        // Connect the player to the mixer using format
-        engine.connect(player, to: mixer, format: format)
+        // Connect player to mainMixer
+        engine.connect(player, to: mainMixer, format: format)
+        player.volume = 1.0
         
-        // Connect the physical microphone (source) to the mixer using WebRTC's mono format
+        // Connect physical microphone to micMixer, and micMixer to mainMixer
         if let src = source {
-            print("[WebRTCManager] Connecting input source with WebRTC format: \(format)")
-            engine.connect(src, to: mixer, format: format)
+            engine.connect(src, to: micMixer, format: format)
+            micMixer.outputVolume = 0.0
+            print("[WebRTCManager] Programmatically muted physical microphone input using micMixer outputVolume")
+            engine.connect(micMixer, to: mainMixer, format: format)
         }
         
-        // Connect the mixer to WebRTC's input destination
-        engine.connect(mixer, to: destination, format: format)
+        // Connect mainMixer to WebRTC's input destination
+        engine.connect(mainMixer, to: destination, format: format)
         
         self.playerNode = player
-        self.mixerNode = mixer
+        self.micMixerNode = micMixer
+        self.mainMixerNode = mainMixer
+        self.physicalInputNode = source
+        self.inputDestinationNode = destination
+        self.inputFormat = format
         
         return 0
     }
