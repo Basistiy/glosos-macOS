@@ -16,10 +16,13 @@ struct ContentView: View {
     @StateObject private var p2pController = P2PConnectionController()
     @AppStorage("autoSpeakAgentReplies") private var autoSpeakAgentReplies = true
     @AppStorage("preventSystemSleep") private var preventSystemSleep = false
+    @AppStorage("playThinkingSound") private var playThinkingSound = true
+    @AppStorage("thinkingSoundName") private var thinkingSoundName = "Funk"
     @State private var isShowingSettings = false
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
     @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
+    @State private var processingSoundTask: Task<Void, Never>? = nil
 
     var body: some View {
         Group {
@@ -72,6 +75,8 @@ struct ContentView: View {
                             runtimeController: runtimeController,
                             autoSpeakAgentReplies: $autoSpeakAgentReplies,
                             preventSystemSleep: $preventSystemSleep,
+                            playThinkingSound: $playThinkingSound,
+                            thinkingSoundName: $thinkingSoundName,
                             connectAction: { Task { await connectUsingSelectedRuntime() } },
                             startRuntimeAction: { Task { await startManagedRuntimeOnly() } },
                             stopRuntimeAction: { Task { await stopManagedRuntime() } },
@@ -149,8 +154,22 @@ struct ContentView: View {
                 .onChange(of: preventSystemSleep) { _, newValue in
                     PowerAssertionManager.shared.updateAssertion(shouldPreventSleep: newValue)
                 }
-                .onChange(of: agentController.isAwaitingAssistantResponse) { _, _ in
+                .onChange(of: agentController.isAwaitingAssistantResponse) { _, newValue in
                     sendPendingUtteranceIfPossible()
+                    if playThinkingSound {
+                        if newValue {
+                            startProcessingSound()
+                        } else {
+                            stopProcessingSound()
+                        }
+                    }
+                }
+                .onChange(of: playThinkingSound) { _, newValue in
+                    if !newValue {
+                        stopProcessingSound()
+                    } else if agentController.isAwaitingAssistantResponse {
+                        startProcessingSound()
+                    }
                 }
                 .onChange(of: speechController.playbackInterruptionToken) { _, newValue in
                     if newValue != nil {
@@ -455,6 +474,42 @@ struct ContentView: View {
         runtimeController.saveSettings()
         agentController.saveSettings()
     }
+
+    private func startProcessingSound() {
+        processingSoundTask?.cancel()
+        processingSoundTask = Task {
+            let soundURL = URL(fileURLWithPath: "/System/Library/Sounds/\(thinkingSoundName).aiff")
+            
+            if p2pController.isConnected {
+                p2pController.playAudioFile(at: soundURL) {}
+            } else {
+                NSSound(named: thinkingSoundName)?.play()
+            }
+            
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                } catch {
+                    break
+                }
+                guard !Task.isCancelled else { break }
+                
+                if p2pController.isConnected {
+                    p2pController.playAudioFile(at: soundURL) {}
+                } else {
+                    NSSound(named: thinkingSoundName)?.play()
+                }
+            }
+        }
+    }
+
+    private func stopProcessingSound() {
+        processingSoundTask?.cancel()
+        processingSoundTask = nil
+        if p2pController.isConnected {
+            p2pController.stopAudioPlayback()
+        }
+    }
 }
 
 
@@ -465,6 +520,8 @@ private struct SettingsView: View {
     @ObservedObject var runtimeController: LocalRuntimeController
     @Binding var autoSpeakAgentReplies: Bool
     @Binding var preventSystemSleep: Bool
+    @Binding var playThinkingSound: Bool
+    @Binding var thinkingSoundName: String
     let connectAction: () -> Void
     let startRuntimeAction: () -> Void
     let stopRuntimeAction: () -> Void
@@ -735,6 +792,20 @@ private struct SettingsView: View {
 
                     Section("Playback") {
                         Toggle("Speak assistant replies aloud", isOn: $autoSpeakAgentReplies)
+                        Toggle("Auditory thinking feedback", isOn: $playThinkingSound)
+                        if playThinkingSound {
+                            Picker("Thinking sound", selection: $thinkingSoundName) {
+                                Text("Funk (Sleek Slap)").tag("Funk")
+                                Text("Tink (Subtle)").tag("Tink")
+                                Text("Glass (Soft Chime)").tag("Glass")
+                                Text("Ping (Clear)").tag("Ping")
+                                Text("Submarine (Sonar)").tag("Submarine")
+                            }
+                            .pickerStyle(.menu)
+                            .onChange(of: thinkingSoundName) { _, newValue in
+                                NSSound(named: newValue)?.play()
+                            }
+                        }
                     }
 
                     Section("System") {
