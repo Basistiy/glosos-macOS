@@ -15,6 +15,11 @@ public protocol SignalingClientDelegate: AnyObject {
     func signalingClient(_ client: SignalingClient, didReceiveHangUp senderSocketId: String)
     func signalingClient(_ client: SignalingClient, didFailWithError error: Error)
     func signalingClient(_ client: SignalingClient, willAttemptReconnect attempt: Int, delay: TimeInterval)
+    func signalingClientDidGiveUpReconnect(_ client: SignalingClient)
+}
+
+public extension SignalingClientDelegate {
+    func signalingClientDidGiveUpReconnect(_ client: SignalingClient) {}
 }
 
 public final class SignalingClient: NSObject {
@@ -348,6 +353,10 @@ public final class SignalingClient: NSObject {
                 }
             } else if !self.isExplicitDisconnect {
                 print("[SignalingClient] Max reconnect attempts reached (\(self.maxReconnectAttempts)). Giving up.")
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.delegate?.signalingClientDidGiveUpReconnect(self)
+                }
             }
         }
     }

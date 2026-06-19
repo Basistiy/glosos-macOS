@@ -284,6 +284,12 @@ extension P2PConnectionController: SignalingClientDelegate {
         statusDetail = "Reconnecting (attempt \(attempt)/5)..."
         appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/5)...", state: .final)
     }
+    
+    public func signalingClientDidGiveUpReconnect(_ client: SignalingClient) {
+        print("[P2PConnectionController] Signaling client gave up reconnecting.")
+        statusDetail = "Connection lost"
+        appendSystemMessage("Signaling server connection lost permanently. Reconnect failed.", state: .error)
+    }
 }
 
 // MARK: - WebRTCManagerDelegate
