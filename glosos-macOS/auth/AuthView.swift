@@ -11,9 +11,6 @@ import AuthenticationServices
 public struct AuthView: View {
     @ObservedObject var authManager: AuthManager
 
-    @State private var isRegisterMode = false
-    @State private var username = ""
-    @State private var password = ""
     @State private var localError: String? = nil
 
     @State private var showSettings = false
@@ -45,92 +42,13 @@ public struct AuthView: View {
                         .font(.system(size: 32, weight: .bold, design: .rounded))
                         .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
 
-                    Text(isRegisterMode ? "Create a secure account" : "Sign in to start WebRTC P2P")
+                    Text("Sign in to start WebRTC P2P")
                         .font(.system(.subheadline, design: .rounded))
                         .foregroundStyle(Color.black.opacity(0.5))
                 }
 
                 // Form Card
                 VStack(spacing: 16) {
-                    // Segmented Mode Control
-                    HStack(spacing: 0) {
-                        Button {
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                isRegisterMode = false
-                                localError = nil
-                                authManager.clearError()
-                            }
-                        } label: {
-                            Text("Sign In")
-                                .font(.system(.body, design: .rounded).weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(!isRegisterMode ? Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.12) : Color.clear)
-                                .foregroundStyle(!isRegisterMode ? Color(red: 0.18, green: 0.52, blue: 0.42) : Color.black.opacity(0.4))
-                                .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                                isRegisterMode = true
-                                localError = nil
-                                authManager.clearError()
-                            }
-                        } label: {
-                            Text("Register")
-                                .font(.system(.body, design: .rounded).weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(isRegisterMode ? Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.12) : Color.clear)
-                                .foregroundStyle(isRegisterMode ? Color(red: 0.18, green: 0.52, blue: 0.42) : Color.black.opacity(0.4))
-                                .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(4)
-                    .background(Color.black.opacity(0.04))
-                    .cornerRadius(12)
-
-                    // Form Fields
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Username")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(Color.black.opacity(0.5))
-
-                        TextField("Enter username", text: $username)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.white)
-                            .cornerRadius(10)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
-                            )
-                            .autocorrectionDisabled()
-                            #if os(macOS)
-                            .textFieldStyle(.plain)
-                            #endif
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Password")
-                            .font(.system(.caption, design: .rounded).weight(.semibold))
-                            .foregroundStyle(Color.black.opacity(0.5))
-
-                        SecureField("Enter password", text: $password)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.white)
-                            .cornerRadius(10)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .strokeBorder(Color.black.opacity(0.06), lineWidth: 1)
-                            )
-                    }
-
                     // Error display (local validation or manager API error)
                     if let errorMessage = localError ?? authManager.error {
                         Text(errorMessage)
@@ -144,42 +62,6 @@ public struct AuthView: View {
                             .cornerRadius(8)
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
-
-                    // Submit Button
-                    Button {
-                        Task { await handleSubmit() }
-                    } label: {
-                        HStack {
-                            if authManager.isLoading {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .padding(.trailing, 6)
-                            }
-
-                            Text(isRegisterMode ? "Register & Login" : "Sign In")
-                                .font(.system(.body, design: .rounded).weight(.semibold))
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(Color(red: 0.18, green: 0.52, blue: 0.42))
-                        .foregroundStyle(.white)
-                        .cornerRadius(12)
-                        .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(authManager.isLoading)
-                    .opacity(authManager.isLoading ? 0.7 : 1.0)
-
-                    HStack {
-                        Color.black.opacity(0.1)
-                            .frame(height: 1)
-                        Text("or")
-                            .font(.system(.footnote, design: .rounded))
-                            .foregroundStyle(Color.black.opacity(0.3))
-                        Color.black.opacity(0.1)
-                            .frame(height: 1)
-                    }
-                    .padding(.vertical, 4)
 
                     SignInWithAppleButton(
                         onRequest: { request in
@@ -254,35 +136,6 @@ public struct AuthView: View {
         .onAppear {
             customEndpoint = authManager.signalingAPIEndpoint
             authManager.clearError()
-        }
-    }
-
-    private func handleSubmit() async {
-        localError = nil
-        authManager.clearError()
-
-        let trimmedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedPass = password
-
-        if trimmedUser.isEmpty || trimmedPass.isEmpty {
-            localError = "Please enter both username and password."
-            return
-        }
-
-        if trimmedUser.count < 3 {
-            localError = "Username must be at least 3 characters."
-            return
-        }
-
-        if trimmedPass.count < 6 {
-            localError = "Password must be at least 6 characters."
-            return
-        }
-
-        if isRegisterMode {
-            _ = await authManager.register(username: trimmedUser, password: trimmedPass)
-        } else {
-            _ = await authManager.login(username: trimmedUser, password: trimmedPass)
         }
     }
 
