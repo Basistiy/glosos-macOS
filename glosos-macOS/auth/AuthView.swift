@@ -63,17 +63,22 @@ public struct AuthView: View {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                     }
 
-                    SignInWithAppleButton(
-                        onRequest: { request in
-                            request.requestedScopes = [.fullName, .email]
-                        },
-                        onCompletion: { result in
-                            handleAppleSignInCompletion(result)
+                    Button {
+                        authManager.startAppleWebAuth()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "apple.logo")
+                                .font(.system(size: 16))
+                            Text("Sign in with Apple")
+                                .font(.system(size: 14, weight: .medium))
                         }
-                    )
-                    .signInWithAppleButtonStyle(.black)
-                    .frame(height: 40)
-                    .cornerRadius(10)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 40)
+                        .background(Color.black)
+                        .cornerRadius(10)
+                    }
+                    .buttonStyle(.plain)
                     .disabled(authManager.isLoading)
                 }
                 .padding(24)

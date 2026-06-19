@@ -8,6 +8,9 @@
 import Foundation
 import Combine
 import Security
+import AppKit
+import AuthenticationServices
+
 
 /// A helper class to securely store the JWT token in the macOS Keychain.
 public struct KeychainHelper {
@@ -77,6 +80,7 @@ public final class AuthManager: ObservableObject {
     private static let tokenAccountKey = "current_user_token"
 
     private var tokenExpiredObserver: Any?
+    private let presentationContextProvider = PresentationContextProvider()
 
     public init(userDefaults: UserDefaults = .standard, urlSession: URLSession = .shared) {
         self.userDefaults = userDefaults
@@ -242,6 +246,79 @@ public final class AuthManager: ObservableObject {
         self.error = nil
     }
 
+    public func startAppleWebAuth() {
+        self.isLoading = true
+        self.error = nil
+        
+        let clientID = "com.glosos.glososmacos.signin"
+        let redirectURI = "https://glosos.com/api/auth/apple/callback"
+        
+        guard let url = URL(string: "https://appleid.apple.com/auth/authorize?client_id=\(clientID)&redirect_uri=\(redirectURI)&response_type=code%20id_token&scope=name%20email&response_mode=form_post&state=app_macos") else {
+            self.error = "Invalid OAuth URL"
+            self.isLoading = false
+            return
+        }
+        
+        let session = ASWebAuthenticationSession(
+            url: url,
+            callbackURLScheme: "glosos"
+        ) { [weak self] callbackURL, error in
+            guard let self = self else { return }
+            
+            Task { @MainActor in
+                self.isLoading = false
+                if let error = error {
+                    let nsError = error as NSError
+                    if nsError.domain == ASWebAuthenticationSessionErrorDomain && nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        return
+                    }
+                    self.error = error.localizedDescription
+                    return
+                }
+                
+                guard let callbackURL = callbackURL else {
+                    self.error = "Authentication failed: No callback URL"
+                    return
+                }
+                
+                self.handleWebAuthCallback(url: callbackURL)
+            }
+        }
+        
+        session.presentationContextProvider = self.presentationContextProvider
+        session.start()
+    }
+    
+    private func handleWebAuthCallback(url: URL) {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true),
+              let queryItems = components.queryItems else {
+            self.error = "Invalid callback URL format"
+            return
+        }
+        
+        guard let token = queryItems.first(where: { $0.name == "token" })?.value else {
+            self.error = "Authentication failed: Missing token in server callback"
+            return
+        }
+        
+        let idString = queryItems.first(where: { $0.name == "id" })?.value ?? "0"
+        let id = Int(idString) ?? 0
+        let username = queryItems.first(where: { $0.name == "username" })?.value ?? "Google User"
+        
+        let authUser = AuthUser(id: id, username: username)
+        
+        // Save user to UserDefaults
+        if let userData = try? JSONEncoder().encode(authUser) {
+            userDefaults.set(userData, forKey: Self.currentUserInfoKey)
+        }
+        
+        // Save token to Keychain
+        KeychainHelper.save(token: token, account: Self.tokenAccountKey)
+        
+        self.user = authUser
+        self.token = token
+    }
+
     private func performAuthRequest(path: String, username: String, password: String) async -> Bool {
         isLoading = true
         error = nil
@@ -312,3 +389,12 @@ public final class AuthManager: ObservableObject {
         }
     }
 }
+
+@MainActor
+class PresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        return NSApplication.shared.windows.first ?? NSWindow()
+    }
+}
+
+
