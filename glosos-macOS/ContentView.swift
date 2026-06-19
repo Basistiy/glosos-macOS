@@ -611,6 +611,15 @@ private struct SettingsView: View {
 
                                 SecureField("Google API key", text: $runtimeController.managedGoogleAPIKey)
 
+                                HStack(spacing: 4) {
+                                    Text("Get a Google API key from")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                    Link("Google AI Studio", destination: URL(string: "https://aistudio.google.com/")!)
+                                        .font(.system(.footnote, design: .rounded).weight(.semibold))
+                                        .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                }
+
                             case .localOpenAI:
                                 Picker("API Base URL", selection: $localBaseSelection) {
                                     ForEach(localBasePresets.keys.sorted(), id: \.self) { key in
