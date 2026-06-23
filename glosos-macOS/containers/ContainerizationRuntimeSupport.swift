@@ -618,6 +618,18 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
     ) async throws {
         let imageStore = try ImageStore(path: assets.imageStoreURL)
         try await imageStore.delete(reference: reference, performCleanup: true)
+
+        let containersURL = assets.imageStoreURL.appendingPathComponent("containers", isDirectory: true)
+        let fileManager = FileManager.default
+        if let containerDirs = try? fileManager.contentsOfDirectory(at: containersURL, includingPropertiesForKeys: nil) {
+            for dirURL in containerDirs {
+                let markerURL = dirURL.appendingPathComponent(Self.imageReferenceMarkerFilename)
+                if let marker = try? String(contentsOf: markerURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+                   marker == reference {
+                    try? fileManager.removeItem(at: dirURL)
+                }
+            }
+        }
     }
 
     nonisolated private static func containerRootURL(
