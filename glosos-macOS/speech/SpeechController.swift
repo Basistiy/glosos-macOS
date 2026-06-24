@@ -134,6 +134,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     func play(_ text: String) {
+        guard isWebRTCConnected else {
+            return
+        }
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty, !isPreparingPlayback, !isSpeaking else {
             return

@@ -216,6 +216,7 @@ struct glosos_macOSTests {
     @MainActor
     func stopPlaybackCancelsActivePlaybackToken() async throws {
         let controller = SpeechController()
+        controller.isWebRTCConnected = true
         
         // We will trigger a fake playback setup
         controller.play("Test speech synthesis")
