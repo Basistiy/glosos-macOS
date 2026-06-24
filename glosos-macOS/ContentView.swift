@@ -18,6 +18,7 @@ struct ContentView: View {
     @AppStorage("preventSystemSleep") private var preventSystemSleep = false
     @AppStorage("playThinkingSound") private var playThinkingSound = true
     @AppStorage("thinkingSoundName") private var thinkingSoundName = "Funk"
+    @AppStorage("isOnboardingCompleted") private var isOnboardingCompleted = false
     @State private var isShowingSettings = false
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
@@ -26,7 +27,11 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if authManager.token == nil {
+            if !isOnboardingCompleted {
+                OnboardingView(runtimeController: runtimeController) {
+                    isOnboardingCompleted = true
+                }
+            } else if authManager.token == nil {
                 AuthView(authManager: authManager)
             } else {
                 HStack(spacing: 0) {
@@ -407,6 +412,11 @@ struct ContentView: View {
     private func connectUsingSelectedRuntime() async {
         if runtimeController.isManagedMode {
             guard runtimeController.isManagedRuntimeConfigured else {
+                return
+            }
+
+            if runtimeController.runtimeState == .running, let endpoint = runtimeController.currentManagedEndpoint {
+                await agentController.connect(using: endpoint)
                 return
             }
 
