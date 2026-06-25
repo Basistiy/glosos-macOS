@@ -408,8 +408,7 @@ struct OnboardingView: View {
     // MARK: - State Logic
 
     private var isGoogleKeyValid: Bool {
-        let key = runtimeController.managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !key.isEmpty && key.hasPrefix("AIzaSy")
+        !runtimeController.managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var currentProgressStepTitle: String {

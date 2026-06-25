@@ -398,13 +398,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access so the app can transcribe live speech and interrupt playback.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Allow speech recognition so the app can transcribe spoken interruptions during playback.";
 				INFOPLIST_KEY_NSPersonalVoiceUsageDescription = "Allow access to your Personal Voice to synthesize text-to-speech using your own voice.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Allow speech recognition so the app can transcribe spoken interruptions during playback.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.glosos.glososmacos;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -442,13 +442,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access so the app can transcribe live speech and interrupt playback.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Allow speech recognition so the app can transcribe spoken interruptions during playback.";
 				INFOPLIST_KEY_NSPersonalVoiceUsageDescription = "Allow access to your Personal Voice to synthesize text-to-speech using your own voice.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Allow speech recognition so the app can transcribe spoken interruptions during playback.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.2;
+				MARKETING_VERSION = 1.2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.glosos.glososmacos;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
