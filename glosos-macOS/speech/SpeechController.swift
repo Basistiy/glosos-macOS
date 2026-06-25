@@ -30,6 +30,29 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    @Published var usePersonalVoice: Bool {
+        didSet {
+            guard usePersonalVoice != oldValue else { return }
+            userDefaults.set(usePersonalVoice, forKey: Self.usePersonalVoiceKey)
+            updateSpeechVoice()
+        }
+    }
+
+    @Published var selectedPersonalVoiceIdentifier: String? {
+        didSet {
+            guard selectedPersonalVoiceIdentifier != oldValue else { return }
+            if let id = selectedPersonalVoiceIdentifier {
+                userDefaults.set(id, forKey: Self.selectedPersonalVoiceIdentifierKey)
+            } else {
+                userDefaults.removeObject(forKey: Self.selectedPersonalVoiceIdentifierKey)
+            }
+            updateSpeechVoice()
+        }
+    }
+
+    @Published private(set) var personalVoiceAuthorizationStatus: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus = .notDetermined
+    @Published private(set) var availablePersonalVoices: [AVSpeechSynthesisVoice] = []
+
     @Published var isWebRTCConnected = false {
         didSet {
             playbackSynthesizer.delegate = isWebRTCConnected ? nil : self
@@ -58,6 +81,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     var audioFileURL: URL?
     private var currentPlayingFileURL: URL?
     private static let selectedLanguageKey = "speechLanguage"
+    private static let usePersonalVoiceKey = "usePersonalVoice"
+    private static let selectedPersonalVoiceIdentifierKey = "selectedPersonalVoiceIdentifier"
 
     private var vadProcessor: SileroVADProcessor?
     private var isRecordingUtterance = false
@@ -68,7 +93,31 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let selectedLanguage = Self.loadSavedLanguage(from: userDefaults)
         self.userDefaults = userDefaults
         self.selectedLanguage = selectedLanguage
-        self.speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
+        
+        let usePV = userDefaults.bool(forKey: Self.usePersonalVoiceKey)
+        let selectedPVID = userDefaults.string(forKey: Self.selectedPersonalVoiceIdentifierKey)
+        self.usePersonalVoice = usePV
+        self.selectedPersonalVoiceIdentifier = selectedPVID
+        
+        let status = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
+        self.personalVoiceAuthorizationStatus = status
+        
+        var personalVoices: [AVSpeechSynthesisVoice] = []
+        if status == .authorized {
+            personalVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.voiceTraits.contains(.isPersonalVoice) }
+        }
+        self.availablePersonalVoices = personalVoices
+        
+        if usePV, status == .authorized, let pvid = selectedPVID, let voice = personalVoices.first(where: { $0.identifier == pvid }) {
+            self.speechVoice = voice
+        } else if usePV, status == .authorized, let firstVoice = personalVoices.first {
+            self.speechVoice = firstVoice
+            self.selectedPersonalVoiceIdentifier = firstVoice.identifier
+            userDefaults.set(firstVoice.identifier, forKey: Self.selectedPersonalVoiceIdentifierKey)
+        } else {
+            self.speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
+        }
+        
         self.speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguage.localeIdentifier))
         super.init()
         playbackSynthesizer.delegate = self
@@ -235,8 +284,64 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func handleSelectedLanguageChange() {
-        speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
+        updateSpeechVoice()
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: selectedLanguage.localeIdentifier))
+    }
+
+    func updateSpeechVoice() {
+        let status = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
+        self.personalVoiceAuthorizationStatus = status
+        
+        if status == .authorized {
+            self.availablePersonalVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.voiceTraits.contains(.isPersonalVoice) }
+        } else {
+            self.availablePersonalVoices = []
+        }
+        
+        if usePersonalVoice, status == .authorized {
+            if let pvid = selectedPersonalVoiceIdentifier, let voice = availablePersonalVoices.first(where: { $0.identifier == pvid }) {
+                self.speechVoice = voice
+            } else if let firstVoice = availablePersonalVoices.first {
+                self.speechVoice = firstVoice
+                self.selectedPersonalVoiceIdentifier = firstVoice.identifier
+                userDefaults.set(firstVoice.identifier, forKey: Self.selectedPersonalVoiceIdentifierKey)
+            } else {
+                self.speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
+            }
+        } else {
+            self.speechVoice = Self.makeSpeechVoice(for: selectedLanguage)
+        }
+    }
+
+    func setUsePersonalVoice(_ enabled: Bool) async {
+        if enabled {
+            let status = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
+            if status == .notDetermined {
+                let newStatus = await withCheckedContinuation { continuation in
+                    AVSpeechSynthesizer.requestPersonalVoiceAuthorization { status in
+                        continuation.resume(returning: status)
+                    }
+                }
+                
+                self.personalVoiceAuthorizationStatus = newStatus
+                if newStatus == .authorized {
+                    self.usePersonalVoice = true
+                } else {
+                    self.usePersonalVoice = false
+                }
+            } else if status == .authorized {
+                self.usePersonalVoice = true
+            } else {
+                self.usePersonalVoice = false
+            }
+        } else {
+            self.usePersonalVoice = false
+        }
+        updateSpeechVoice()
+    }
+
+    func refreshPersonalVoiceStatus() {
+        updateSpeechVoice()
     }
 
     private func beginPlayback(with text: String) {

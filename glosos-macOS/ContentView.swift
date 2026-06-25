@@ -7,6 +7,7 @@
 
 import AppKit
 import SwiftUI
+import AVFoundation
 
 struct ContentView: View {
     @ObservedObject var authManager: AuthManager
@@ -844,6 +845,40 @@ private struct SettingsView: View {
                         Text("This setting changes both live speech recognition and synthesized voice playback.")
                             .font(.system(.footnote, design: .rounded))
                             .foregroundStyle(.secondary)
+
+                        if speechController.personalVoiceAuthorizationStatus != .unsupported {
+                            Toggle("Use Personal Voice", isOn: Binding(
+                                get: { speechController.usePersonalVoice },
+                                set: { newValue in
+                                    Task {
+                                        await speechController.setUsePersonalVoice(newValue)
+                                    }
+                                }
+                            ))
+
+                            if speechController.usePersonalVoice {
+                                if speechController.availablePersonalVoices.isEmpty {
+                                    Text("No Personal Voices found. Please configure a Personal Voice in macOS System Settings > Accessibility > Personal Voice.")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.red)
+                                } else {
+                                    Picker("Personal Voice", selection: Binding(
+                                        get: { speechController.selectedPersonalVoiceIdentifier },
+                                        set: { newValue in
+                                            speechController.selectedPersonalVoiceIdentifier = newValue
+                                        }
+                                    )) {
+                                        ForEach(speechController.availablePersonalVoices, id: \.identifier) { voice in
+                                            Text(voice.name).tag(voice.identifier as String?)
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Text("Personal Voice is not supported on this Mac.")
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .formStyle(.grouped)
@@ -858,6 +893,7 @@ private struct SettingsView: View {
         }
         .onAppear {
             syncPresetsWithController()
+            speechController.refreshPersonalVoiceStatus()
         }
         .onChange(of: runtimeController.managedModelProvider) { _, _ in
             syncPresetsWithController()
