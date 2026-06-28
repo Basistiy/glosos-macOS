@@ -15,6 +15,7 @@
 		F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000011 /* MLXAudioCore */; };
 		F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000012 /* MLXAudioVAD */; };
 		F0A1B2C32FD6000000000003 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000013 /* HuggingFace */; };
+		F0A1B2C32FD60000000000004 /* MLXAudioSTT in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000014 /* MLXAudioSTT */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +72,7 @@
 				F0A1B2C32FD6000000000003 /* HuggingFace in Frameworks */,
 				F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */,
 				F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */,
+				F0A1B2C32FD6000000000004 /* MLXAudioSTT in Frameworks */,
 				1EA72A952FD815BE00FC5BC6 /* WebRTC.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -139,6 +141,7 @@
 				F0A1B2C32FD6000000000013 /* HuggingFace */,
 				F0A1B2C32FD6000000000011 /* MLXAudioCore */,
 				F0A1B2C32FD6000000000012 /* MLXAudioVAD */,
+				F0A1B2C32FD6000000000014 /* MLXAudioSTT */,
 			);
 			productName = "glosos-macOS";
 			productReference = 1EF1C5ED2FD0B8610011923D /* glosos-macOS.app */;
@@ -595,6 +598,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = F0A1B2C32FD6000000000022 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
 			productName = HuggingFace;
+		};
+		F0A1B2C32FD6000000000014 /* MLXAudioSTT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioSTT;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

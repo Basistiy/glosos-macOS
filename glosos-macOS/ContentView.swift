@@ -846,6 +846,72 @@ private struct SettingsView: View {
                             .font(.system(.footnote, design: .rounded))
                             .foregroundStyle(.secondary)
 
+                        Divider()
+
+                        Picker("ASR System", selection: $speechController.selectedASRSystem) {
+                            ForEach(ASRSystem.allCases) { system in
+                                Text(system.title).tag(system)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        if speechController.selectedASRSystem == .qwen {
+                            switch speechController.qwenASRState {
+                            case .idle:
+                                Text("Select Qwen3 ASR to start download.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            case .downloading(let progress, let completed, let total):
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView("Downloading Qwen3-ASR model...", value: progress, total: 1.0)
+                                        .progressViewStyle(.linear)
+                                    if total > 0 {
+                                        Text("\(String(format: "%.2f", Double(completed) / 1_000_000_000)) GB of \(String(format: "%.2f", Double(total) / 1_000_000_000)) GB (\(Int(progress * 100))%)")
+                                            .font(.system(.footnote, design: .rounded))
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Text("Initializing download...")
+                                            .font(.system(.footnote, design: .rounded))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            case .loading:
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Loading model weights into memory...")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                            case .ready:
+                                HStack(spacing: 6) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                    Text("Qwen3 ASR is ready.")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                            case .failed(let message):
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(.red)
+                                        Text("Failed to load Qwen3 ASR.")
+                                            .font(.system(.body, design: .rounded))
+                                            .bold()
+                                    }
+                                    Text(message)
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.red)
+                                    Button("Retry") {
+                                        speechController.loadQwenModel()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+
                         if speechController.personalVoiceAuthorizationStatus != .unsupported {
                             Toggle("Use Personal Voice", isOn: Binding(
                                 get: { speechController.usePersonalVoice },

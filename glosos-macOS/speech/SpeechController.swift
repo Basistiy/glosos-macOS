@@ -8,6 +8,31 @@
 import AVFoundation
 import Combine
 import Speech
+import MLX
+import MLXAudioCore
+import MLXAudioSTT
+import HuggingFace
+
+enum ASRSystem: String, CaseIterable, Identifiable {
+    case apple = "apple"
+    case qwen = "qwen"
+    
+    var id: String { self.rawValue }
+    var title: String {
+        switch self {
+        case .apple: return "Apple Speech Recognition"
+        case .qwen: return "Qwen3 ASR (Local MLX)"
+        }
+    }
+}
+
+enum QwenASRState: Equatable {
+    case idle
+    case downloading(progress: Double, completedBytes: Int64, totalBytes: Int64)
+    case loading
+    case ready
+    case failed(message: String)
+}
 
 @MainActor
 final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
@@ -18,6 +43,20 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     @Published private(set) var liveTranscript = ""
     @Published var finalizedUtterance: TranscribedUtterance? = nil
     @Published private(set) var playbackInterruptionToken: UUID? = nil
+
+    @Published var selectedASRSystem: ASRSystem {
+        didSet {
+            guard selectedASRSystem != oldValue else {
+                return
+            }
+
+            userDefaults.set(selectedASRSystem.rawValue, forKey: Self.asrSystemKey)
+            handleASRSystemChange()
+        }
+    }
+
+    @Published private(set) var qwenASRState: QwenASRState = .idle
+    private var qwenModel: Qwen3ASRModel?
 
     @Published var selectedLanguage: SpeechLanguage {
         didSet {
@@ -83,6 +122,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let selectedLanguageKey = "speechLanguage"
     private static let usePersonalVoiceKey = "usePersonalVoice"
     private static let selectedPersonalVoiceIdentifierKey = "selectedPersonalVoiceIdentifier"
+    private static let asrSystemKey = "asrSystem"
 
     private var vadProcessor: SileroVADProcessor?
     private var isRecordingUtterance = false
@@ -98,6 +138,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let selectedPVID = userDefaults.string(forKey: Self.selectedPersonalVoiceIdentifierKey)
         self.usePersonalVoice = usePV
         self.selectedPersonalVoiceIdentifier = selectedPVID
+        
+        let asrSystemRaw = userDefaults.string(forKey: Self.asrSystemKey) ?? ASRSystem.apple.rawValue
+        let asrSystem = ASRSystem(rawValue: asrSystemRaw) ?? .apple
+        self.selectedASRSystem = asrSystem
         
         let status = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
         self.personalVoiceAuthorizationStatus = status
@@ -136,6 +180,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             }
         }
         self.vadProcessor?.loadModelIfNeeded()
+        
+        if asrSystem == .qwen {
+            loadQwenModel()
+        }
     }
 
     var isCapturingSpeech: Bool {
@@ -642,6 +690,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func transcribeAudioFile(at url: URL) {
+        if selectedASRSystem == .qwen {
+            transcribeAudioFileWithQwen(at: url)
+        } else {
+            transcribeAudioFileWithApple(at: url)
+        }
+    }
+
+    private func transcribeAudioFileWithApple(at url: URL) {
         guard let recognizer = speechRecognizer else {
             log("Speech recognizer is not initialized.")
             try? FileManager.default.removeItem(at: url)
@@ -681,6 +737,218 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     try? FileManager.default.removeItem(at: url)
                 }
             }
+        }
+    }
+
+    private func transcribeAudioFileWithQwen(at url: URL) {
+        guard let model = qwenModel else {
+            log("Qwen3 ASR is not loaded yet (state: \(qwenASRState)). Falling back to Apple Speech.")
+            transcribeAudioFileWithApple(at: url)
+            return
+        }
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            
+            do {
+                self.log("Loading and resampling audio for Qwen3 ASR...")
+                let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
+                
+                self.log("Running Qwen3 ASR generation...")
+                let output = model.generate(audio: audioArray)
+                let text = output.text
+                
+                self.log("Qwen3 ASR Result: \(text)")
+                
+                await MainActor.run {
+                    self.liveTranscript = text
+                    self.finalizedUtterance = TranscribedUtterance(text: text)
+                }
+            } catch {
+                self.log("Qwen3 ASR transcription failed: \(error.localizedDescription)")
+            }
+            
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    func loadQwenModel() {
+        print("[Qwen3 ASR] loadQwenModel called. State is: \(qwenASRState)")
+        
+        guard qwenASRState == .idle || {
+            if case .failed = qwenASRState { return true }
+            return false
+        }() else {
+            print("[Qwen3 ASR] loadQwenModel ignored because state is not idle or failed.")
+            return
+        }
+        
+        qwenASRState = .downloading(progress: 0.0, completedBytes: 0, totalBytes: 0)
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                print("[Qwen3 ASR] Detached download task started.")
+                let hfToken: String? = ProcessInfo.processInfo.environment["HF_TOKEN"]
+                    ?? Bundle.main.object(forInfoDictionaryKey: "HF_TOKEN") as? String
+                
+                guard let repoID = Repo.ID(rawValue: "mlx-community/Qwen3-ASR-1.7B-bf16") else {
+                    throw NSError(
+                        domain: "SpeechController",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: mlx-community/Qwen3-ASR-1.7B-bf16"]
+                    )
+                }
+                
+                print("[Qwen3 ASR] Setting up custom URLSession with 4 min request timeouts...")
+                let clientConfiguration = URLSessionConfiguration.default
+                clientConfiguration.timeoutIntervalForRequest = 240.0 // 4 minutes
+                clientConfiguration.timeoutIntervalForResource = 7200.0 // 2 hours
+                clientConfiguration.urlCache = nil
+                clientConfiguration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                clientConfiguration.httpShouldUsePipelining = true
+                let session = URLSession(configuration: clientConfiguration)
+                
+                print("[Qwen3 ASR] Initializing HubClient...")
+                let client: HubClient
+                if let token = hfToken, !token.isEmpty {
+                    client = HubClient(
+                        session: session,
+                        host: HubClient.defaultHost,
+                        bearerToken: token,
+                        cache: .default
+                    )
+                } else {
+                    client = HubClient(
+                        session: session,
+                        cache: .default
+                    )
+                }
+                
+                let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
+                let modelDir = HubCache.default.cacheDirectory
+                    .appendingPathComponent("mlx-audio")
+                    .appendingPathComponent(modelSubdir)
+                
+                print("[Qwen3 ASR] Model directory resolved: \(modelDir.path)")
+                try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+                
+                print("[Qwen3 ASR] Querying repository file list from Hugging Face...")
+                let allEntries = try await client.listFiles(in: repoID, kind: .model, revision: "main", recursive: true)
+                print("[Qwen3 ASR] Retrieved file list containing \(allEntries.count) entries.")
+                
+                let filesToDownload = allEntries.filter { entry in
+                    let ext = URL(fileURLWithPath: entry.path).pathExtension.lowercased()
+                    return ext == "safetensors" || ext == "json" || ext == "txt"
+                }
+                
+                let totalBytes = filesToDownload.reduce(0) { $0 + Int64($1.size ?? 0) }
+                print("[Qwen3 ASR] Found \(filesToDownload.count) files to download (Total size: \(totalBytes) bytes)")
+                
+                let aggregator = ProgressAggregator(totalBytes: totalBytes) { completed, speed in
+                    let fraction = totalBytes > 0 ? Double(completed) / Double(totalBytes) : 0.0
+                    let speedMB = speed / (1024.0 * 1024.0)
+                    print("[Qwen3 ASR] Download progress update: \(completed) / \(totalBytes) bytes (\(String(format: "%.1f", fraction * 100))%) - Speed: \(String(format: "%.2f", speedMB)) MB/s")
+                    Task { @MainActor [weak self] in
+                        self?.qwenASRState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
+                    }
+                }
+                
+                // Sequential download of files directly via custom stream downloader to avoid lock conflicts or system download task timeouts
+                print("[Qwen3 ASR] Downloading files sequentially...")
+                for entry in filesToDownload {
+                    let destination = modelDir.appendingPathComponent(entry.path)
+                    let fileWeight = Int64(entry.size ?? 0)
+                    
+                    // Check if file is already fully downloaded or partially downloaded
+                    var existingSize: Int64 = 0
+                    if FileManager.default.fileExists(atPath: destination.path) {
+                        if let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path),
+                           let size = attributes[.size] as? Int64 {
+                            if size == fileWeight {
+                                print("[Qwen3 ASR] [File] Already cached: \(entry.path)")
+                                aggregator.update(file: entry.path, completed: fileWeight)
+                                continue
+                            } else {
+                                existingSize = size
+                            }
+                        }
+                    }
+                    
+                    let directory = destination.deletingLastPathComponent()
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    
+                    let url = URL(string: "https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-bf16/resolve/main/\(entry.path)")!
+                    var request = URLRequest(url: url)
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
+                    if let token = hfToken, !token.isEmpty {
+                        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    }
+                    
+                    if existingSize > 0 {
+                        print("[Qwen3 ASR] [File] Resuming download for \(entry.path) from \(existingSize) bytes...")
+                        request.setValue("bytes=\(existingSize)-", forHTTPHeaderField: "Range")
+                        aggregator.update(file: entry.path, completed: existingSize)
+                    } else {
+                        print("[Qwen3 ASR] [File] Downloading: \(entry.path) (\(fileWeight) bytes)")
+                    }
+                    
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        let downloader = DataTaskStreamDownloader(
+                            destination: destination,
+                            resumeOffset: existingSize,
+                            onProgress: { completed, _ in
+                                aggregator.update(file: entry.path, completed: completed)
+                            },
+                            onComplete: {
+                                continuation.resume()
+                            },
+                            onError: { error in
+                                continuation.resume(throwing: error)
+                            }
+                        )
+                        
+                        let delegateQueue = OperationQueue()
+                        delegateQueue.qualityOfService = .userInitiated
+                        let taskSession = URLSession(configuration: clientConfiguration, delegate: downloader, delegateQueue: delegateQueue)
+                        downloader.session = taskSession
+                        
+                        let task = taskSession.dataTask(with: request)
+                        task.resume()
+                    }
+                    
+                    print("[Qwen3 ASR] [File] Finished: \(entry.path)")
+                    aggregator.update(file: entry.path, completed: fileWeight)
+                }
+                
+                print("[Qwen3 ASR] All files successfully resolved. Loading weights into memory...")
+                Task { @MainActor [weak self] in
+                    self?.qwenASRState = .loading
+                }
+                
+                let model = try await Qwen3ASRModel.fromModelDirectory(modelDir)
+                
+                Task { @MainActor [weak self] in
+                    self?.qwenModel = model
+                    self?.qwenASRState = .ready
+                    self?.log("Qwen3 ASR model loaded successfully and ready.")
+                    print("[Qwen3 ASR] Model is fully loaded and ready.")
+                }
+            } catch {
+                print("[Qwen3 ASR] Error occurred: \(error.localizedDescription)")
+                Task { @MainActor [weak self] in
+                    self?.qwenASRState = .failed(message: error.localizedDescription)
+                    self?.log("Failed to load Qwen3 ASR: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func handleASRSystemChange() {
+        if selectedASRSystem == .qwen {
+            loadQwenModel()
         }
     }
 
@@ -812,6 +1080,179 @@ final class PlaybackToken {
             lock.lock()
             _isCancelled = newValue
             lock.unlock()
+        }
+    }
+}
+
+final class ProgressAggregator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completedBytesByFile: [String: Int64] = [:]
+    private var lastReportedPercent: Double = -1.0
+    private var startTime: Date?
+    let totalBytes: Int64
+    let onProgress: @Sendable (Int64, Double) -> Void
+    
+    init(totalBytes: Int64, onProgress: @escaping @Sendable (Int64, Double) -> Void) {
+        self.totalBytes = totalBytes
+        self.onProgress = onProgress
+    }
+    
+    func update(file: String, completed: Int64) {
+        lock.lock()
+        if startTime == nil && completed > 0 {
+            startTime = Date()
+        }
+        completedBytesByFile[file] = completed
+        let totalCompleted = completedBytesByFile.values.reduce(0, +)
+        let percent = totalBytes > 0 ? (Double(totalCompleted) / Double(totalBytes)) * 100.0 : 0.0
+        
+        let shouldReport = (percent - lastReportedPercent >= 0.5) || (percent >= 100.0 && lastReportedPercent < 100.0)
+        if shouldReport {
+            lastReportedPercent = percent
+            let duration = Date().timeIntervalSince(startTime ?? Date())
+            let speed = duration > 0 ? Double(totalCompleted) / duration : 0.0
+            lock.unlock()
+            onProgress(totalCompleted, speed)
+        } else {
+            lock.unlock()
+        }
+    }
+}
+
+final class DataTaskStreamDownloader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let destination: URL
+    private let resumeOffset: Int64
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+    private let onComplete: @Sendable () -> Void
+    private let onError: @Sendable (Error) -> Void
+    
+    weak var session: URLSession?
+    private var fileHandle: FileHandle?
+    private var totalBytesExpected: Int64 = 0
+    private var totalBytesWritten: Int64 = 0
+    private var firstChunkReceived = false
+    private let lock = NSLock()
+    
+    private var writeBuffer = Data()
+    private let maxBufferSize = 512 * 1024 // 512 KB buffer
+    
+    init(
+        destination: URL,
+        resumeOffset: Int64,
+        onProgress: @escaping @Sendable (Int64, Int64) -> Void,
+        onComplete: @escaping @Sendable () -> Void,
+        onError: @escaping @Sendable (Error) -> Void
+    ) {
+        self.destination = destination
+        self.resumeOffset = resumeOffset
+        self.onProgress = onProgress
+        self.onComplete = onComplete
+        self.onError = onError
+    }
+    
+    func urlSession(
+        _: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        lock.lock()
+        let httpResponse = response as? HTTPURLResponse
+        let isPartial = httpResponse?.statusCode == 206
+        
+        if isPartial {
+            totalBytesExpected = response.expectedContentLength + resumeOffset
+            totalBytesWritten = resumeOffset
+        } else {
+            totalBytesExpected = response.expectedContentLength
+            totalBytesWritten = 0
+        }
+        
+        let directory = destination.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        
+        if !isPartial {
+            try? FileManager.default.removeItem(at: destination)
+            FileManager.default.createFile(atPath: destination.path, contents: nil, attributes: nil)
+        }
+        
+        do {
+            let handle = try FileHandle(forWritingTo: destination)
+            if isPartial {
+                try handle.seekToEnd()
+            }
+            fileHandle = handle
+            lock.unlock()
+            completionHandler(.allow)
+        } catch {
+            lock.unlock()
+            completionHandler(.cancel)
+            onError(error)
+        }
+    }
+    
+    func urlSession(
+        _: URLSession,
+        dataTask _: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        lock.lock()
+        if !firstChunkReceived {
+            firstChunkReceived = true
+            print("[Qwen3 ASR] [File] First chunk received (\(data.count) bytes). Resumed: \(resumeOffset > 0)")
+        }
+        
+        writeBuffer.append(data)
+        totalBytesWritten += Int64(data.count)
+        
+        if writeBuffer.count >= maxBufferSize {
+            let bufferToWrite = writeBuffer
+            writeBuffer = Data()
+            
+            guard let fileHandle = fileHandle else {
+                lock.unlock()
+                return
+            }
+            
+            do {
+                try fileHandle.write(contentsOf: bufferToWrite)
+                lock.unlock()
+                onProgress(totalBytesWritten, totalBytesExpected)
+            } catch {
+                lock.unlock()
+                onError(error)
+            }
+        } else {
+            lock.unlock()
+            onProgress(totalBytesWritten, totalBytesExpected)
+        }
+    }
+    
+    func urlSession(
+        _: URLSession,
+        task _: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        lock.lock()
+        if !writeBuffer.isEmpty, let fileHandle = fileHandle {
+            do {
+                try fileHandle.write(contentsOf: writeBuffer)
+            } catch {
+                print("[Qwen3 ASR] Failed to flush final write buffer: \(error.localizedDescription)")
+            }
+            writeBuffer = Data()
+        }
+        
+        try? fileHandle?.close()
+        fileHandle = nil
+        lock.unlock()
+        
+        session?.invalidateAndCancel()
+        
+        if let error = error {
+            onError(error)
+        } else {
+            onComplete()
         }
     }
 }
