@@ -747,6 +747,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             return
         }
         
+        let language = selectedLanguage.rawValue
+        
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else {
                 try? FileManager.default.removeItem(at: url)
@@ -758,7 +760,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
                 
                 self.log("Running Qwen3 ASR generation...")
-                let output = model.generate(audio: audioArray)
+                let output = model.generate(audio: audioArray, language: language)
                 let text = output.text
                 
                 self.log("Qwen3 ASR Result: \(text)")
