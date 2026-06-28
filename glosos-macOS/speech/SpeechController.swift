@@ -167,7 +167,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         playbackSynthesizer.delegate = self
         
         self.vadProcessor = SileroVADProcessor(logHandler: { message in
-            print("[VoiceStop] [VAD] \(message)")
+            print(SpeechController.formatLog("[VAD] \(message)"))
         })
         self.vadProcessor?.onSpeechStarted = { [weak self] in
             Task { @MainActor in
@@ -1022,8 +1022,15 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    nonisolated private static func formatLog(_ message: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        let timestamp = formatter.string(from: Date())
+        return "[VoiceStop] [\(timestamp)] \(message)"
+    }
+
     nonisolated private func log(_ message: String) {
-        print("[VoiceStop] \(message)")
+        print(SpeechController.formatLog(message))
     }
 
     private static func loadSavedLanguage(from userDefaults: UserDefaults) -> SpeechLanguage {
