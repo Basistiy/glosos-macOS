@@ -968,7 +968,7 @@ private struct SettingsView: View {
                                 HStack {
                                     Text("Start Frames")
                                     Spacer()
-                                    Text("\(speechController.vadStartFrames) (\(speechController.vadStartFrames * 32) ms)")
+                                    Text("\(speechController.vadStartFrames) (\(speechController.vadStartFramesMs) ms)")
                                         .foregroundStyle(.secondary)
                                 }
                                 Slider(value: Binding(
@@ -1001,7 +1001,7 @@ private struct SettingsView: View {
                                 HStack {
                                     Text("End Frames")
                                     Spacer()
-                                    Text("\(speechController.vadEndFrames) (\(speechController.vadEndFrames * 32) ms)")
+                                    Text("\(speechController.vadEndFrames) (\(speechController.vadEndFramesMs) ms)")
                                         .foregroundStyle(.secondary)
                                 }
                                 Slider(value: Binding(
@@ -1011,6 +1011,32 @@ private struct SettingsView: View {
                                 Text("Number of consecutive 32ms frames of silence to confirm speech ended.")
                                     .font(.system(.footnote, design: .rounded))
                                     .foregroundStyle(.secondary)
+                            }
+                            
+                            Divider()
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Toggle("Enable Noise Gate", isOn: $speechController.vadNoiseGateEnabled)
+                                Text("Filter out quiet background noise and whispers before VAD evaluation.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+                            
+                            if speechController.vadNoiseGateEnabled {
+                                Divider()
+                                
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack {
+                                        Text("Noise Gate Threshold")
+                                        Spacer()
+                                        Text(String(format: "%.0f dB", speechController.vadNoiseGateDecibels))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Slider(value: $speechController.vadNoiseGateDecibels, in: -60.0 ... -20.0, step: 1.0)
+                                    Text("Logarithmic volume threshold. Quieter audio is treated as absolute silence.")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                         .padding(.vertical, 4)

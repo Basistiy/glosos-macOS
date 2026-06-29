@@ -150,6 +150,32 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    @Published var vadNoiseGateEnabled: Bool {
+        didSet {
+            guard vadNoiseGateEnabled != oldValue else { return }
+            userDefaults.set(vadNoiseGateEnabled, forKey: Self.vadNoiseGateEnabledKey)
+        }
+    }
+
+    @Published var vadNoiseGateDecibels: Double {
+        didSet {
+            guard vadNoiseGateDecibels != oldValue else { return }
+            userDefaults.set(vadNoiseGateDecibels, forKey: Self.vadNoiseGateDecibelsKey)
+        }
+    }
+
+    var vadNoiseGateRMSThreshold: Double {
+        pow(10.0, vadNoiseGateDecibels / 20.0)
+    }
+
+    var vadStartFramesMs: Int {
+        vadStartFrames * 32
+    }
+
+    var vadEndFramesMs: Int {
+        vadEndFrames * 32
+    }
+
     var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
     var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
     var onStopPlayback: (() -> Void)?
@@ -180,6 +206,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let vadStartFramesKey = "vadStartFrames"
     private static let vadEndThresholdKey = "vadEndThreshold"
     private static let vadEndFramesKey = "vadEndFrames"
+    private static let vadNoiseGateEnabledKey = "vadNoiseGateEnabled"
+    private static let vadNoiseGateDecibelsKey = "vadNoiseGateDecibels"
 
     private var vadProcessor: SileroVADProcessor?
     private var isRecordingUtterance = false
@@ -204,11 +232,15 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let startFrames = userDefaults.object(forKey: Self.vadStartFramesKey) as? Int ?? 2
         let endThreshold = userDefaults.object(forKey: Self.vadEndThresholdKey) as? Float ?? 0.35
         let endFrames = userDefaults.object(forKey: Self.vadEndFramesKey) as? Int ?? 10
+        let noiseGateEnabled = userDefaults.object(forKey: Self.vadNoiseGateEnabledKey) as? Bool ?? true
+        let noiseGateDecibels = userDefaults.object(forKey: Self.vadNoiseGateDecibelsKey) as? Double ?? -45.0
 
         self.vadStartThreshold = startThreshold
         self.vadStartFrames = startFrames
         self.vadEndThreshold = endThreshold
         self.vadEndFrames = endFrames
+        self.vadNoiseGateEnabled = noiseGateEnabled
+        self.vadNoiseGateDecibels = noiseGateDecibels
 
         let status = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
         self.personalVoiceAuthorizationStatus = status
@@ -347,7 +379,16 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         // Feed mono channel data to VAD processor
         if let channelData = buffer.floatChannelData {
             let frameLength = Int(buffer.frameLength)
-            let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+            var samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+            
+            if vadNoiseGateEnabled && !samples.isEmpty {
+                let sumOfSquares = samples.reduce(0.0) { $0 + Double($1 * $1) }
+                let rms = sqrt(sumOfSquares / Double(samples.count))
+                if rms < vadNoiseGateRMSThreshold {
+                    samples = Array(repeating: 0.0, count: frameLength)
+                }
+            }
+            
             vadProcessor?.append(samples: samples, sampleRate: Int(buffer.format.sampleRate))
         }
         
