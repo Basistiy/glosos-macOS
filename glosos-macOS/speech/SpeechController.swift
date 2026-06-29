@@ -814,13 +814,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private func transcribeAudioFileWithApple(at url: URL) {
         guard let recognizer = speechRecognizer else {
             log("Speech recognizer is not initialized.")
-            try? FileManager.default.removeItem(at: url)
+            renameOrDeleteAudioFile(at: url, withRecognizedText: nil)
             return
         }
         
         guard recognizer.isAvailable else {
             log("Speech recognizer is not available.")
-            try? FileManager.default.removeItem(at: url)
+            renameOrDeleteAudioFile(at: url, withRecognizedText: nil)
             return
         }
         
@@ -835,7 +835,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             
             if let error = error {
                 self.log("Speech recognition failed: \(error.localizedDescription)")
-                try? FileManager.default.removeItem(at: url)
+                self.renameOrDeleteAudioFile(at: url, withRecognizedText: nil)
                 return
             }
             
@@ -848,7 +848,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                         self.liveTranscript = text
                         self.finalizedUtterance = TranscribedUtterance(text: text)
                     }
-                    try? FileManager.default.removeItem(at: url)
+                    self.renameOrDeleteAudioFile(at: url, withRecognizedText: text)
                 }
             }
         }
@@ -869,6 +869,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 return
             }
             
+            var recognizedText: String? = nil
             do {
                 self.log("Loading and resampling audio for Qwen3 ASR...")
                 let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
@@ -878,6 +879,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let text = output.text
                 
                 self.log("Qwen3 ASR Result: \(text)")
+                recognizedText = text
                 
                 await MainActor.run {
                     self.liveTranscript = text
@@ -887,7 +889,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 self.log("Qwen3 ASR transcription failed: \(error.localizedDescription)")
             }
             
-            try? FileManager.default.removeItem(at: url)
+            self.renameOrDeleteAudioFile(at: url, withRecognizedText: recognizedText)
         }
     }
 
@@ -1147,6 +1149,42 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     nonisolated private func log(_ message: String) {
         print(SpeechController.formatLog(message))
+    }
+
+    nonisolated private func sanitizeFilename(_ name: String) -> String {
+        // Keep alphanumeric characters, spaces, hyphens, and underscores
+        let allowedChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_"))
+        let sanitized = name.unicodeScalars.filter { allowedChars.contains($0) }.map { String($0) }.joined()
+        let trimmed = sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "recognized_speech" : trimmed
+    }
+
+    nonisolated private func renameOrDeleteAudioFile(at url: URL, withRecognizedText text: String?) {
+        let nameToUse: String
+        if let text = text {
+            let sanitized = sanitizeFilename(text)
+            nameToUse = sanitized
+        } else {
+            nameToUse = "failed_recognition"
+        }
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
+        let timestamp = formatter.string(from: Date())
+        
+        let maxLength = 50
+        let truncatedText = String(nameToUse.prefix(maxLength))
+        let ext = url.pathExtension.isEmpty ? "wav" : url.pathExtension
+        let newFilename = "\(truncatedText)_\(timestamp).\(ext)"
+        let destinationURL = url.deletingLastPathComponent().appendingPathComponent(newFilename)
+        
+        do {
+            try FileManager.default.moveItem(at: url, to: destinationURL)
+            log("Kept and renamed audio clip to: \(destinationURL.path)")
+        } catch {
+            log("Failed to rename audio clip at \(url.path) to \(newFilename): \(error.localizedDescription)")
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func loadSavedLanguage(from userDefaults: UserDefaults) -> SpeechLanguage {
