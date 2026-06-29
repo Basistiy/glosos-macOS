@@ -77,6 +77,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    @Published var useConversationContext: Bool {
+        didSet {
+            guard useConversationContext != oldValue else { return }
+            userDefaults.set(useConversationContext, forKey: Self.useConversationContextKey)
+        }
+    }
+
     @Published var selectedPersonalVoiceIdentifier: String? {
         didSet {
             guard selectedPersonalVoiceIdentifier != oldValue else { return }
@@ -180,6 +187,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
     var onStopPlayback: (() -> Void)?
     var onSpeechStarted: (() -> Void)?
+    var conversationContextProvider: (() -> String)?
     private var currentPlaybackToken: PlaybackToken?
     
     var agentResponsesDirectoryURL: URL?
@@ -201,6 +209,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let selectedLanguageKey = "speechLanguage"
     private static let usePersonalVoiceKey = "usePersonalVoice"
     private static let selectedPersonalVoiceIdentifierKey = "selectedPersonalVoiceIdentifier"
+    private static let useConversationContextKey = "useConversationContextForASR"
     private static let asrSystemKey = "asrSystem"
     private static let vadStartThresholdKey = "vadStartThreshold"
     private static let vadStartFramesKey = "vadStartFrames"
@@ -223,6 +232,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let selectedPVID = userDefaults.string(forKey: Self.selectedPersonalVoiceIdentifierKey)
         self.usePersonalVoice = usePV
         self.selectedPersonalVoiceIdentifier = selectedPVID
+        
+        if userDefaults.object(forKey: Self.useConversationContextKey) == nil {
+            self.useConversationContext = true
+        } else {
+            self.useConversationContext = userDefaults.bool(forKey: Self.useConversationContextKey)
+        }
         
         let asrSystemRaw = userDefaults.string(forKey: Self.asrSystemKey) ?? ASRSystem.apple.rawValue
         let asrSystem = ASRSystem(rawValue: asrSystemRaw) ?? .apple
@@ -862,6 +877,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
         
         let language = selectedLanguage.rawValue
+        let context = useConversationContext ? (conversationContextProvider?() ?? "") : ""
         
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self = self else {
@@ -874,8 +890,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 self.log("Loading and resampling audio for Qwen3 ASR...")
                 let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
                 
-                self.log("Running Qwen3 ASR generation...")
-                let output = model.generate(audio: audioArray, language: language)
+                self.log("Running Qwen3 ASR generation with context length: \(context.count)...")
+                let output = model.generate(audio: audioArray, context: context, language: language)
                 let text = output.text
                 
                 self.log("Qwen3 ASR Result: \(text)")

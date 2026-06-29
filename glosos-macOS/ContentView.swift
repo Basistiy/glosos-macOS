@@ -384,6 +384,21 @@ struct ContentView: View {
             agentController?.abortActiveTurn()
             pendingUtteranceCoordinator.clear()
         }
+        speechController.conversationContextProvider = { [weak agentController] in
+            guard let agentController = agentController else { return "" }
+            let relevantMessages = agentController.messages
+                .filter { ($0.role == .user || $0.role == .assistant) && $0.state != .error && !$0.text.isEmpty }
+                .suffix(4)
+            guard !relevantMessages.isEmpty else { return "" }
+            
+            var contextLines = ["[Recent Conversation History]"]
+            for msg in relevantMessages {
+                let speaker = msg.role == .user ? "User" : "Assistant"
+                contextLines.append("\(speaker): \(msg.text)")
+            }
+            contextLines.append("[End of History - Transcribe the user's next audio response below]")
+            return contextLines.joined(separator: "\n")
+        }
         speechController.isWebRTCConnected = p2pController.isConnected
         
         // Setup incoming WebRTC audio transcription callback
@@ -910,6 +925,13 @@ private struct SettingsView: View {
                                     .controlSize(.small)
                                 }
                             }
+
+                            Divider()
+
+                            Toggle("Include conversation context", isOn: $speechController.useConversationContext)
+                            Text("Feeds the last 4 turns of your conversation history to Qwen3 ASR to improve transcription accuracy.")
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(.secondary)
                         }
 
                         if speechController.personalVoiceAuthorizationStatus != .unsupported {
