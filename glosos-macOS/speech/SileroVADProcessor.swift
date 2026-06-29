@@ -161,8 +161,20 @@ final class SileroVADProcessor: @unchecked Sendable {
     private var onSpeechStartedClosure: (@Sendable () -> Void)?
     private var onSpeechEndedClosure: (@Sendable () -> Void)?
 
-    init(logHandler: @escaping @Sendable (String) -> Void) {
+    init(
+        startThreshold: Float = 0.60,
+        startFrames: Int = 2,
+        endThreshold: Float = 0.35,
+        endFrames: Int = 10,
+        logHandler: @escaping @Sendable (String) -> Void
+    ) {
         self.logHandler = logHandler
+        self.stateMachine = VADSpeechStateMachine(
+            startThreshold: startThreshold,
+            startFrames: startFrames,
+            endThreshold: endThreshold,
+            endFrames: endFrames
+        )
     }
 
     var isReady: Bool {
@@ -197,6 +209,18 @@ final class SileroVADProcessor: @unchecked Sendable {
             callbackLock.lock()
             onSpeechEndedClosure = newValue
             callbackLock.unlock()
+        }
+    }
+
+    func updateThresholds(startThreshold: Float, startFrames: Int, endThreshold: Float, endFrames: Int) {
+        processingQueue.async {
+            self.stateMachine = VADSpeechStateMachine(
+                startThreshold: startThreshold,
+                startFrames: startFrames,
+                endThreshold: endThreshold,
+                endFrames: endFrames
+            )
+            self.logHandler("Silero VAD parameters updated: startThreshold=\(startThreshold), startFrames=\(startFrames), endThreshold=\(endThreshold), endFrames=\(endFrames)")
         }
     }
 

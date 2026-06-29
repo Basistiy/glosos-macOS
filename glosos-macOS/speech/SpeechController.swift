@@ -97,6 +97,59 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             playbackSynthesizer.delegate = isWebRTCConnected ? nil : self
         }
     }
+
+    @Published var vadStartThreshold: Float {
+        didSet {
+            guard vadStartThreshold != oldValue else { return }
+            userDefaults.set(vadStartThreshold, forKey: Self.vadStartThresholdKey)
+            vadProcessor?.updateThresholds(
+                startThreshold: vadStartThreshold,
+                startFrames: vadStartFrames,
+                endThreshold: vadEndThreshold,
+                endFrames: vadEndFrames
+            )
+        }
+    }
+
+    @Published var vadStartFrames: Int {
+        didSet {
+            guard vadStartFrames != oldValue else { return }
+            userDefaults.set(vadStartFrames, forKey: Self.vadStartFramesKey)
+            vadProcessor?.updateThresholds(
+                startThreshold: vadStartThreshold,
+                startFrames: vadStartFrames,
+                endThreshold: vadEndThreshold,
+                endFrames: vadEndFrames
+            )
+        }
+    }
+
+    @Published var vadEndThreshold: Float {
+        didSet {
+            guard vadEndThreshold != oldValue else { return }
+            userDefaults.set(vadEndThreshold, forKey: Self.vadEndThresholdKey)
+            vadProcessor?.updateThresholds(
+                startThreshold: vadStartThreshold,
+                startFrames: vadStartFrames,
+                endThreshold: vadEndThreshold,
+                endFrames: vadEndFrames
+            )
+        }
+    }
+
+    @Published var vadEndFrames: Int {
+        didSet {
+            guard vadEndFrames != oldValue else { return }
+            userDefaults.set(vadEndFrames, forKey: Self.vadEndFramesKey)
+            vadProcessor?.updateThresholds(
+                startThreshold: vadStartThreshold,
+                startFrames: vadStartFrames,
+                endThreshold: vadEndThreshold,
+                endFrames: vadEndFrames
+            )
+        }
+    }
+
     var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
     var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
     var onStopPlayback: (() -> Void)?
@@ -123,6 +176,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let usePersonalVoiceKey = "usePersonalVoice"
     private static let selectedPersonalVoiceIdentifierKey = "selectedPersonalVoiceIdentifier"
     private static let asrSystemKey = "asrSystem"
+    private static let vadStartThresholdKey = "vadStartThreshold"
+    private static let vadStartFramesKey = "vadStartFrames"
+    private static let vadEndThresholdKey = "vadEndThreshold"
+    private static let vadEndFramesKey = "vadEndFrames"
 
     private var vadProcessor: SileroVADProcessor?
     private var isRecordingUtterance = false
@@ -143,6 +200,16 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let asrSystem = ASRSystem(rawValue: asrSystemRaw) ?? .apple
         self.selectedASRSystem = asrSystem
         
+        let startThreshold = userDefaults.object(forKey: Self.vadStartThresholdKey) as? Float ?? 0.60
+        let startFrames = userDefaults.object(forKey: Self.vadStartFramesKey) as? Int ?? 2
+        let endThreshold = userDefaults.object(forKey: Self.vadEndThresholdKey) as? Float ?? 0.35
+        let endFrames = userDefaults.object(forKey: Self.vadEndFramesKey) as? Int ?? 10
+
+        self.vadStartThreshold = startThreshold
+        self.vadStartFrames = startFrames
+        self.vadEndThreshold = endThreshold
+        self.vadEndFrames = endFrames
+
         let status = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
         self.personalVoiceAuthorizationStatus = status
         
@@ -166,9 +233,15 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         super.init()
         playbackSynthesizer.delegate = self
         
-        self.vadProcessor = SileroVADProcessor(logHandler: { message in
-            print(SpeechController.formatLog("[VAD] \(message)"))
-        })
+        self.vadProcessor = SileroVADProcessor(
+            startThreshold: startThreshold,
+            startFrames: startFrames,
+            endThreshold: endThreshold,
+            endFrames: endFrames,
+            logHandler: { message in
+                print(SpeechController.formatLog("[VAD] \(message)"))
+            }
+        )
         self.vadProcessor?.onSpeechStarted = { [weak self] in
             Task { @MainActor in
                 self?.handleSpeechStarted()

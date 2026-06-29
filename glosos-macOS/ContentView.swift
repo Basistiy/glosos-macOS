@@ -946,6 +946,75 @@ private struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    Section("Voice Activity Detection (VAD)") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Start Threshold")
+                                    Spacer()
+                                    Text(String(format: "%.2f", speechController.vadStartThreshold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $speechController.vadStartThreshold, in: 0.1...0.9, step: 0.05)
+                                Text("Minimum speech probability required to start capturing.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+                            
+                            Divider()
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("Start Frames")
+                                    Spacer()
+                                    Text("\(speechController.vadStartFrames) (\(speechController.vadStartFrames * 32) ms)")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: Binding(
+                                    get: { Double(speechController.vadStartFrames) },
+                                    set: { speechController.vadStartFrames = Int($0) }
+                                ), in: 1...10, step: 1)
+                                Text("Number of consecutive 32ms frames above start threshold to confirm speech.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+                            
+                            Divider()
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("End Threshold")
+                                    Spacer()
+                                    Text(String(format: "%.2f", speechController.vadEndThreshold))
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: $speechController.vadEndThreshold, in: 0.1...0.9, step: 0.05)
+                                Text("Probability threshold below which audio is considered silence.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+                            
+                            Divider()
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text("End Frames")
+                                    Spacer()
+                                    Text("\(speechController.vadEndFrames) (\(speechController.vadEndFrames * 32) ms)")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Slider(value: Binding(
+                                    get: { Double(speechController.vadEndFrames) },
+                                    set: { speechController.vadEndFrames = Int($0) }
+                                ), in: 2...30, step: 1)
+                                Text("Number of consecutive 32ms frames of silence to confirm speech ended.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
                 .formStyle(.grouped)
             }
