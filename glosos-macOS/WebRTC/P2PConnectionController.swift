@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import Network
 import WebRTC
 
 @MainActor
@@ -29,6 +30,12 @@ final class P2PConnectionController: ObservableObject {
     
     private var currentCallerSocketId: String?
     private var peerUsername: String?
+    
+    private var pathMonitor: NWPathMonitor?
+    private let pathMonitorQueue = DispatchQueue(label: "com.glosos.network-monitor")
+    private var lastSavedApiEndpoint: String?
+    private var lastSavedToken: String?
+    private var wasOffline = false
     
     init() {
         self.webRTCManager = WebRTCManager()
@@ -87,8 +94,15 @@ final class P2PConnectionController: ObservableObject {
     }
     
     func startSignaling(apiEndpoint: String, token: String) {
-        // Disconnect any existing session first
-        disconnect()
+        // Save credentials for network self-healing
+        self.lastSavedApiEndpoint = apiEndpoint
+        self.lastSavedToken = token
+        
+        // Disconnect any existing session first (do NOT clear credentials)
+        disconnect(isUserInitiated: false)
+        
+        // Start network monitoring
+        startPathMonitoring()
         
         print("[P2PConnectionController] Starting signaling connection...")
         statusDetail = "Connecting to signaling server..."
@@ -106,7 +120,14 @@ final class P2PConnectionController: ObservableObject {
         client.connect()
     }
     
-    func disconnect() {
+    func disconnect(isUserInitiated: Bool = false) {
+        if isUserInitiated {
+            // User explicitly requested disconnect: stop monitoring and forget credentials
+            self.lastSavedApiEndpoint = nil
+            self.lastSavedToken = nil
+            stopPathMonitoring()
+        }
+        
         if let callerId = currentCallerSocketId {
             print("[P2PConnectionController] Sending hang-up to peer \(callerId)...")
             signalingClient?.sendHangUp(targetSocketId: callerId)
@@ -117,6 +138,45 @@ final class P2PConnectionController: ObservableObject {
         
         cleanupCall()
         statusDetail = "Disconnected"
+    }
+    
+    private func startPathMonitoring() {
+        guard pathMonitor == nil else { return }
+        
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                self?.handleNetworkPathUpdate(path)
+            }
+        }
+        self.pathMonitor = monitor
+        monitor.start(queue: pathMonitorQueue)
+        print("[P2PConnectionController] Network path monitoring started.")
+    }
+    
+    private func stopPathMonitoring() {
+        print("[P2PConnectionController] Network path monitoring stopped.")
+        pathMonitor?.cancel()
+        pathMonitor = nil
+    }
+    
+    private func handleNetworkPathUpdate(_ path: NWPath) {
+        let isPathSatisfied = path.status == .satisfied
+        print("[P2PConnectionController] Network path status updated: \(path.status), interfaces: \(path.availableInterfaces)")
+        
+        if !isPathSatisfied {
+            self.wasOffline = true
+        }
+        
+        if isPathSatisfied && self.wasOffline {
+            self.wasOffline = false
+            
+            if let apiEndpoint = lastSavedApiEndpoint,
+               let token = lastSavedToken {
+                print("[P2PConnectionController] Network path is satisfied after being offline. Re-initiating signaling connection...")
+                startSignaling(apiEndpoint: apiEndpoint, token: token)
+            }
+        }
     }
     
     func sendMessage(_ text: String) -> Bool {

@@ -401,6 +401,13 @@
 					"$(PROJECT_DIR)/Frameworks/WebRTC.xcframework/macos-arm64_x86_64",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleURLTypes = (
+					{
+						CFBundleURLSchemes = (
+							glosos,
+						);
+					},
+				);
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access so the app can transcribe live speech and interrupt playback.";
 				INFOPLIST_KEY_NSPersonalVoiceUsageDescription = "Allow access to your Personal Voice to synthesize text-to-speech using your own voice.";
@@ -445,6 +452,13 @@
 					"$(PROJECT_DIR)/Frameworks/WebRTC.xcframework/macos-arm64_x86_64",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleURLTypes = (
+					{
+						CFBundleURLSchemes = (
+							glosos,
+						);
+					},
+				);
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access so the app can transcribe live speech and interrupt playback.";
 				INFOPLIST_KEY_NSPersonalVoiceUsageDescription = "Allow access to your Personal Voice to synthesize text-to-speech using your own voice.";

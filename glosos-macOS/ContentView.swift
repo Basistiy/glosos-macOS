@@ -140,7 +140,7 @@ struct ContentView: View {
                     if let newToken = newToken {
                         p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: newToken)
                     } else {
-                        p2pController.disconnect()
+                        p2pController.disconnect(isUserInitiated: true)
                         p2pController.clearMessages()
                     }
                 }
@@ -221,7 +221,7 @@ struct ContentView: View {
                 .onDisappear {
                     saveSettings()
                     agentController.disconnect()
-                    p2pController.disconnect()
+                    p2pController.disconnect(isUserInitiated: true)
                     speechController.stopContinuousListening()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
