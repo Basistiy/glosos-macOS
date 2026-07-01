@@ -37,6 +37,10 @@ public final class SignalingClient: NSObject {
     private let maxReconnectAttempts = 5
     private var reconnectWorkItem: DispatchWorkItem?
     
+    private var heartbeatTimer: Timer?
+    private var pingInterval: TimeInterval = 25.0
+    private var pingTimeout: TimeInterval = 20.0
+    
     public init(apiEndpoint: String, token: String) {
         self.apiEndpoint = apiEndpoint
         self.token = token
@@ -91,6 +95,12 @@ public final class SignalingClient: NSObject {
             self.reconnectWorkItem?.cancel()
             self.reconnectWorkItem = nil
             self.reconnectAttempts = 0
+            
+            // Invalidate heartbeat timer
+            DispatchQueue.main.async { [weak self] in
+                self?.heartbeatTimer?.invalidate()
+                self?.heartbeatTimer = nil
+            }
             
             guard self.isConnected || self.webSocketTask != nil else { return }
             
@@ -181,9 +191,25 @@ public final class SignalingClient: NSObject {
         
         guard let firstChar = text.first else { return }
         
+        // Reset heartbeat timer on any incoming message
+        self.resetHeartbeatTimer()
+        
         if firstChar == "0" {
             // Engine.IO Handshake packet
             print("[SignalingClient] Engine.IO handshake received: \(text)")
+            
+            // Parse pingInterval and pingTimeout from handshake
+            if let data = String(text.dropFirst()).data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+                if let interval = json["pingInterval"] as? Double {
+                    self.pingInterval = interval / 1000.0
+                }
+                if let timeout = json["pingTimeout"] as? Double {
+                    self.pingTimeout = timeout / 1000.0
+                }
+                print("[SignalingClient] Handshake heartbeat settings: pingInterval=\(self.pingInterval)s, pingTimeout=\(self.pingTimeout)s")
+            }
+            
             // Send Socket.IO connect packet to the default namespace (40) with JWT Auth Token in payload
             let authPayload = [
                 "token": self.token,
@@ -322,6 +348,13 @@ public final class SignalingClient: NSObject {
     private func handleDisconnect() {
         queue.async { [weak self] in
             guard let self = self else { return }
+            
+            // Invalidate heartbeat timer
+            DispatchQueue.main.async { [weak self] in
+                self?.heartbeatTimer?.invalidate()
+                self?.heartbeatTimer = nil
+            }
+            
             guard self.isConnected || self.webSocketTask != nil else { return }
             self.webSocketTask = nil
             self.urlSession = nil
@@ -333,10 +366,15 @@ public final class SignalingClient: NSObject {
             }
             
             // Schedule reconnect if this was an implicit disconnect
-            if !self.isExplicitDisconnect && self.reconnectAttempts < self.maxReconnectAttempts {
+            if !self.isExplicitDisconnect {
                 self.reconnectAttempts += 1
-                let delay = min(30.0, pow(2.0, Double(self.reconnectAttempts)))
-                print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) in \(delay) seconds...")
+                let delay = min(30.0, pow(2.0, Double(min(5, self.reconnectAttempts))))
+                
+                if self.reconnectAttempts <= self.maxReconnectAttempts {
+                    print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) in \(delay) seconds...")
+                } else {
+                    print("[SignalingClient] Connection lost. Scheduling background reconnect attempt \(self.reconnectAttempts) in \(delay) seconds...")
+                }
                 
                 self.reconnectWorkItem?.cancel()
                 let workItem = DispatchWorkItem { [weak self] in
@@ -350,15 +388,43 @@ public final class SignalingClient: NSObject {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     self.delegate?.signalingClient(self, willAttemptReconnect: self.reconnectAttempts, delay: delay)
-                }
-            } else if !self.isExplicitDisconnect {
-                print("[SignalingClient] Max reconnect attempts reached (\(self.maxReconnectAttempts)). Giving up.")
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.delegate?.signalingClientDidGiveUpReconnect(self)
+                    
+                    if self.reconnectAttempts == self.maxReconnectAttempts {
+                        print("[SignalingClient] Max rapid reconnect attempts reached (\(self.maxReconnectAttempts)). Transitioning to background retries.")
+                        self.delegate?.signalingClientDidGiveUpReconnect(self)
+                    }
                 }
             }
         }
+    }
+    
+    private func resetHeartbeatTimer() {
+        self.queue.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Schedule/reset the timer on the main queue
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.heartbeatTimer?.invalidate()
+                
+                let timeoutDuration = self.pingInterval + self.pingTimeout
+                self.heartbeatTimer = Timer.scheduledTimer(withTimeInterval: timeoutDuration, repeats: false) { [weak self] _ in
+                    self?.queue.async {
+                        self?.handleHeartbeatTimeout()
+                    }
+                }
+            }
+        }
+    }
+    
+    private func handleHeartbeatTimeout() {
+        print("[SignalingClient] Heartbeat timeout: No ping or message received from server for \(self.pingInterval + self.pingTimeout) seconds. Marking connection as dead.")
+        let error = NSError(
+            domain: "SignalingClient",
+            code: -3,
+            userInfo: [NSLocalizedDescriptionKey: "Signaling connection timed out due to heartbeat loss."]
+        )
+        self.handleFailure(error)
     }
     
     // MARK: - Static URL formulation helper

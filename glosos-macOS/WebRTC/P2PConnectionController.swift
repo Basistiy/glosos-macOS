@@ -36,6 +36,7 @@ final class P2PConnectionController: ObservableObject {
     private var lastSavedApiEndpoint: String?
     private var lastSavedToken: String?
     private var wasOffline = false
+    private var hasGivenUpReconnecting = false
     
     init() {
         self.webRTCManager = WebRTCManager()
@@ -97,6 +98,7 @@ final class P2PConnectionController: ObservableObject {
         // Save credentials for network self-healing
         self.lastSavedApiEndpoint = apiEndpoint
         self.lastSavedToken = token
+        self.hasGivenUpReconnecting = false // Reset given up state
         
         // Disconnect any existing session first (do NOT clear credentials)
         disconnect(isUserInitiated: false)
@@ -168,12 +170,14 @@ final class P2PConnectionController: ObservableObject {
             self.wasOffline = true
         }
         
-        if isPathSatisfied && self.wasOffline {
+        // If network recovered from offline, or if we gave up reconnecting and the network is satisfied
+        if isPathSatisfied && (self.wasOffline || self.hasGivenUpReconnecting) {
             self.wasOffline = false
+            self.hasGivenUpReconnecting = false
             
             if let apiEndpoint = lastSavedApiEndpoint,
                let token = lastSavedToken {
-                print("[P2PConnectionController] Network path is satisfied after being offline. Re-initiating signaling connection...")
+                print("[P2PConnectionController] Network path is satisfied. Re-initiating signaling connection...")
                 startSignaling(apiEndpoint: apiEndpoint, token: token)
             }
         }
@@ -347,6 +351,7 @@ extension P2PConnectionController: SignalingClientDelegate {
     
     public func signalingClientDidGiveUpReconnect(_ client: SignalingClient) {
         print("[P2PConnectionController] Signaling client gave up reconnecting.")
+        self.hasGivenUpReconnecting = true
         statusDetail = "Connection lost"
         appendSystemMessage("Signaling server connection lost permanently. Reconnect failed.", state: .error)
     }
