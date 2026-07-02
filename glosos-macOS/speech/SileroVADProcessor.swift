@@ -84,7 +84,7 @@ struct VADSpeechStateMachine {
         startThreshold: Float = 0.60,
         startFrames: Int = 2,
         endThreshold: Float = 0.35,
-        endFrames: Int = 10,
+        endFrames: Int = 20,
         chunkDuration: TimeInterval = Double(SileroChunkAccumulator.targetChunkSize) / Double(SileroChunkAccumulator.targetSampleRate)
     ) {
         self.startThreshold = startThreshold
@@ -165,7 +165,7 @@ final class SileroVADProcessor: @unchecked Sendable {
         startThreshold: Float = 0.60,
         startFrames: Int = 2,
         endThreshold: Float = 0.35,
-        endFrames: Int = 10,
+        endFrames: Int = 20,
         logHandler: @escaping @Sendable (String) -> Void
     ) {
         self.logHandler = logHandler

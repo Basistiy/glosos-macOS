@@ -246,8 +246,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let startThreshold = userDefaults.object(forKey: Self.vadStartThresholdKey) as? Float ?? 0.60
         let startFrames = userDefaults.object(forKey: Self.vadStartFramesKey) as? Int ?? 2
         let endThreshold = userDefaults.object(forKey: Self.vadEndThresholdKey) as? Float ?? 0.35
-        let endFrames = userDefaults.object(forKey: Self.vadEndFramesKey) as? Int ?? 10
-        let noiseGateEnabled = userDefaults.object(forKey: Self.vadNoiseGateEnabledKey) as? Bool ?? true
+        let endFrames = userDefaults.object(forKey: Self.vadEndFramesKey) as? Int ?? 20
+        let noiseGateEnabled = userDefaults.object(forKey: Self.vadNoiseGateEnabledKey) as? Bool ?? false
         let noiseGateDecibels = userDefaults.object(forKey: Self.vadNoiseGateDecibelsKey) as? Double ?? -45.0
 
         self.vadStartThreshold = startThreshold
