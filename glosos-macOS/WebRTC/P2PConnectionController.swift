@@ -135,6 +135,7 @@ final class P2PConnectionController: ObservableObject {
             signalingClient?.sendHangUp(targetSocketId: callerId)
         }
         
+        signalingClient?.delegate = nil // Clear delegate to prevent any callbacks during or after disconnect
         signalingClient?.disconnect()
         signalingClient = nil
         
@@ -251,12 +252,14 @@ final class P2PConnectionController: ObservableObject {
 
 extension P2PConnectionController: SignalingClientDelegate {
     public func signalingClientDidConnect(_ client: SignalingClient) {
+        guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Connected to signaling server successfully.")
         statusDetail = "Waiting for browser connection..."
         appendSystemMessage("Ready! Log in to the web app on another device to call this client.", state: .final)
     }
     
     public func signalingClientDidDisconnect(_ client: SignalingClient) {
+        guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling client disconnected.")
         if signalingClient != nil {
             statusDetail = "Disconnected from signaling server"
@@ -266,6 +269,7 @@ extension P2PConnectionController: SignalingClientDelegate {
     }
     
     public func signalingClient(_ client: SignalingClient, didReceiveIncomingCall callerSocketId: String, callerUsername: String, offer: [String: Any]) {
+        guard client === self.signalingClient else { return }
         // If we are already connected to a peer, decline the incoming call or hang up the current connection.
         // For simplicity, we accept the new call and end the old one.
         if isConnected || currentCallerSocketId != nil {
@@ -292,6 +296,7 @@ extension P2PConnectionController: SignalingClientDelegate {
         
         webRTCManager.handleIncomingCall(offerSdp: offer["sdp"] as? String ?? "") { [weak self] result in
             guard let self = self else { return }
+            guard client === self.signalingClient else { return }
             switch result {
             case .success(let localSdp):
                 print("[P2PConnectionController] Negotiation success. Sending SDP answer...")
@@ -313,6 +318,7 @@ extension P2PConnectionController: SignalingClientDelegate {
     }
     
     public func signalingClient(_ client: SignalingClient, didReceiveIceCandidate senderSocketId: String, candidate: [String: Any]) {
+        guard client === self.signalingClient else { return }
         guard senderSocketId == currentCallerSocketId else { return }
         
         guard let sdp = candidate["candidate"] as? String,
@@ -330,6 +336,7 @@ extension P2PConnectionController: SignalingClientDelegate {
     }
     
     public func signalingClient(_ client: SignalingClient, didReceiveHangUp senderSocketId: String) {
+        guard client === self.signalingClient else { return }
         guard senderSocketId == currentCallerSocketId else { return }
         print("[P2PConnectionController] Peer \(peerUsername ?? senderSocketId) hung up.")
         appendSystemMessage("Peer ended connection.", state: .final)
@@ -337,6 +344,7 @@ extension P2PConnectionController: SignalingClientDelegate {
     }
     
     public func signalingClient(_ client: SignalingClient, didFailWithError error: Error) {
+        guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling error: \(error.localizedDescription)")
         statusDetail = "Signaling error"
         appendSystemMessage("Signaling error: \(error.localizedDescription)", state: .error)
@@ -344,12 +352,14 @@ extension P2PConnectionController: SignalingClientDelegate {
     }
     
     public func signalingClient(_ client: SignalingClient, willAttemptReconnect attempt: Int, delay: TimeInterval) {
+        guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling reconnect attempt \(attempt) in \(delay) seconds...")
         statusDetail = "Reconnecting (attempt \(attempt)/5)..."
         appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/5)...", state: .final)
     }
     
     public func signalingClientDidGiveUpReconnect(_ client: SignalingClient) {
+        guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling client gave up reconnecting.")
         self.hasGivenUpReconnecting = true
         statusDetail = "Connection lost"
