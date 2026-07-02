@@ -42,32 +42,36 @@ struct ContentView: View {
                         Divider()
                             .overlay(Color.black.opacity(0.06))
 
-                        VStack(spacing: 12) {
-                            Spacer()
-                            Image(systemName: "laptopcomputer.and.iphone")
-                                .font(.system(size: 48))
-                                .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
-                            Link(destination: URL(string: "https://glosos.com")!) {
-                                Text("connect to your mac at glosos.com")
-                                    .font(.system(.body, design: .rounded).weight(.semibold))
-                                    .padding(.horizontal, 20)
-                                    .padding(.vertical, 12)
-                                    .background(Color(red: 0.18, green: 0.52, blue: 0.42))
-                                    .foregroundStyle(.white)
-                                    .cornerRadius(12)
-                                    .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
+                        if runtimeController.managedModelProvider == .gemini && runtimeController.managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            googleAPIKeyRequiredView
+                        } else {
+                            VStack(spacing: 12) {
+                                Spacer()
+                                Image(systemName: "laptopcomputer.and.iphone")
+                                    .font(.system(size: 48))
+                                    .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                Link(destination: URL(string: "https://glosos.com")!) {
+                                    Text("connect to your mac at glosos.com")
+                                        .font(.system(.body, design: .rounded).weight(.semibold))
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 12)
+                                        .background(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                        .foregroundStyle(.white)
+                                        .cornerRadius(12)
+                                        .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
+                                }
+                                .buttonStyle(.plain)
+                                Spacer()
                             }
-                            .buttonStyle(.plain)
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(
-                            LinearGradient(
-                                colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
                             )
-                        )
+                        }
 
                     }
 
@@ -499,6 +503,103 @@ struct ContentView: View {
         NSApp.keyWindow?.makeFirstResponder(nil)
         runtimeController.saveSettings()
         agentController.saveSettings()
+    }
+
+    private var isGoogleKeyValid: Bool {
+        !runtimeController.managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveSettingsAndRestartRuntime() {
+        saveSettings()
+        Task {
+            await restartManagedRuntime()
+        }
+    }
+
+    private var googleAPIKeyRequiredView: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            
+            VStack(spacing: 12) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                    .padding(.bottom, 4)
+                
+                Text("Google API Key Required")
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+                
+                Text("To use Google Gemini, please enter your Google AI Studio API key.")
+                    .font(.system(.body, design: .rounded))
+                    .foregroundStyle(Color.black.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+            
+            VStack(spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Google API Key")
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
+                    
+                    SecureField("AIzaSy...", text: $runtimeController.managedGoogleAPIKey)
+                        .textFieldStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.white)
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.black.opacity(0.1), lineWidth: 1)
+                        )
+                        .font(.system(.body, design: .monospaced))
+                    
+                    HStack(spacing: 4) {
+                        Text("Don't have an API key?")
+                            .font(.system(.footnote, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Link("Get one for free at Google AI Studio", destination: URL(string: "https://aistudio.google.com/")!)
+                            .font(.system(.footnote, design: .rounded).weight(.semibold))
+                            .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                    }
+                }
+            }
+            .padding(24)
+            .background(.white.opacity(0.82))
+            .cornerRadius(24)
+            .overlay(
+                RoundedRectangle(cornerRadius: 24)
+                    .strokeBorder(.white.opacity(0.5), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.03), radius: 15, x: 0, y: 10)
+            .frame(maxWidth: 460)
+            
+            Button {
+                saveSettingsAndRestartRuntime()
+            } label: {
+                Text("Save Key & Connect")
+                    .font(.system(.body, design: .rounded).weight(.semibold))
+                    .padding(.horizontal, 48)
+                    .padding(.vertical, 12)
+                    .background(isGoogleKeyValid ? Color(red: 0.18, green: 0.52, blue: 0.42) : Color.gray.opacity(0.4))
+                    .foregroundStyle(.white)
+                    .cornerRadius(12)
+                    .shadow(color: isGoogleKeyValid ? Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2) : Color.clear, radius: 6, x: 0, y: 3)
+            }
+            .buttonStyle(.plain)
+            .disabled(!isGoogleKeyValid)
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            LinearGradient(
+                colors: [Color(red: 0.96, green: 0.95, blue: 0.92), Color(red: 0.93, green: 0.94, blue: 0.91)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
     }
 
     private func startProcessingSound() {

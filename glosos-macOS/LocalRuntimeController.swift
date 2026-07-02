@@ -76,9 +76,8 @@ struct ManagedContainerConfiguration: Equatable {
         switch modelProvider {
         case .gemini:
             variables.append("GOOGLE_GENAI_USE_VERTEXAI=false")
-            if let googleAPIKey {
-                variables.append("GOOGLE_API_KEY=\(googleAPIKey)")
-            }
+            let key = (googleAPIKey == nil || googleAPIKey!.isEmpty) ? "placeholder_key" : googleAPIKey!
+            variables.append("GOOGLE_API_KEY=\(key)")
         case .localOpenAI:
             if let localLLMApiBase {
                 variables.append("OPENAI_BASE_URL=\(localLLMApiBase)")
@@ -460,7 +459,7 @@ final class LocalRuntimeController: ObservableObject {
 
         switch managedModelProvider {
         case .gemini:
-            guard !googleAPIKey.isEmpty else { return nil }
+            break
         case .localOpenAI:
             guard !localLLMApiBase.isEmpty else { return nil }
         }
@@ -480,7 +479,7 @@ final class LocalRuntimeController: ObservableObject {
     private var invalidConfigurationMessage: String {
         switch managedModelProvider {
         case .gemini:
-            return "Enter a valid image, container name, model name, and Google API key for the managed runtime."
+            return "Enter a valid image, container name, and model name for the managed runtime."
         case .localOpenAI:
             return "Enter a valid image, container name, model name, and Local API Base URL for the managed runtime."
         }
