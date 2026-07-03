@@ -10,6 +10,8 @@ import Foundation
 enum SpeechLanguage: String, CaseIterable, Identifiable {
     case english
     case russian
+    case spanish
+    case polish
 
     var id: String { rawValue }
 
@@ -19,6 +21,10 @@ enum SpeechLanguage: String, CaseIterable, Identifiable {
             return "English"
         case .russian:
             return "Russian"
+        case .spanish:
+            return "Spanish"
+        case .polish:
+            return "Polish"
         }
     }
 
@@ -28,6 +34,10 @@ enum SpeechLanguage: String, CaseIterable, Identifiable {
             return "en-US"
         case .russian:
             return "ru-RU"
+        case .spanish:
+            return "es-ES"
+        case .polish:
+            return "pl-PL"
         }
     }
 

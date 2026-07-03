@@ -21,6 +21,8 @@ struct ContentView: View {
     @AppStorage("thinkingSoundName") private var thinkingSoundName = "Funk"
     @AppStorage("isOnboardingCompleted") private var isOnboardingCompleted = false
     @State private var isShowingSettings = false
+    @State private var initialConfiguration: ManagedContainerConfiguration? = nil
+    @State private var enteredAPIKey: String = ""
     @State private var hasInitialized = false
     @State private var pendingUtteranceCoordinator = PendingUtteranceCoordinator()
     @State private var assistantPlaybackCoordinator = AssistantPlaybackCoordinator()
@@ -92,8 +94,7 @@ struct ContentView: View {
                             stopRuntimeAction: { Task { await stopManagedRuntime() } },
                             restartRuntimeAction: { Task { await restartManagedRuntime() } },
                             closeAction: {
-                                saveSettings()
-                                isShowingSettings = false
+                                closeSettingsAndApplyChanges()
                             }
                         )
                         .frame(width: 380)
@@ -316,9 +317,11 @@ struct ContentView: View {
 
             Button {
                 if isShowingSettings {
-                    saveSettings()
+                    closeSettingsAndApplyChanges()
+                } else {
+                    initialConfiguration = runtimeController.resolvedConfiguration
+                    isShowingSettings = true
                 }
-                isShowingSettings.toggle()
             } label: {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 16, weight: .semibold))
@@ -506,13 +509,26 @@ struct ContentView: View {
     }
 
     private var isGoogleKeyValid: Bool {
-        !runtimeController.managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !enteredAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func saveSettingsAndRestartRuntime() {
+        runtimeController.managedGoogleAPIKey = enteredAPIKey
         saveSettings()
         Task {
             await restartManagedRuntime()
+        }
+    }
+
+    private func closeSettingsAndApplyChanges() {
+        let currentConfig = runtimeController.resolvedConfiguration
+        saveSettings()
+        isShowingSettings = false
+        
+        if initialConfiguration != currentConfig {
+            Task {
+                await restartManagedRuntime()
+            }
         }
     }
 
@@ -543,7 +559,7 @@ struct ContentView: View {
                         .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16))
                     
-                    SecureField("AIzaSy...", text: $runtimeController.managedGoogleAPIKey)
+                    SecureField("Google API key", text: $enteredAPIKey)
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -600,6 +616,9 @@ struct ContentView: View {
                 endPoint: .bottomTrailing
             )
         )
+        .onAppear {
+            enteredAPIKey = runtimeController.managedGoogleAPIKey
+        }
     }
 
     private func startProcessingSound() {

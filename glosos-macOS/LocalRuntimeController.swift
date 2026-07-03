@@ -443,7 +443,7 @@ final class LocalRuntimeController: ObservableObject {
         return await startRuntime()
     }
 
-    private var resolvedConfiguration: ManagedContainerConfiguration? {
+    var resolvedConfiguration: ManagedContainerConfiguration? {
         let image = managedContainerImage.trimmingCharacters(in: .whitespacesAndNewlines)
         let containerName = managedContainerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelName = managedModelName.trimmingCharacters(in: .whitespacesAndNewlines)

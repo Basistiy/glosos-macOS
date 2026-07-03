@@ -20,4 +20,14 @@ struct SpeechLanguageTests {
     func russianUsesRussianLocale() {
         #expect(SpeechLanguage.russian.localeIdentifier == "ru-RU")
     }
+
+    @Test
+    func spanishUsesSpanishLocale() {
+        #expect(SpeechLanguage.spanish.localeIdentifier == "es-ES")
+    }
+
+    @Test
+    func polishUsesPolishLocale() {
+        #expect(SpeechLanguage.polish.localeIdentifier == "pl-PL")
+    }
 }
