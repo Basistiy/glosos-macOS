@@ -186,7 +186,6 @@ final class LocalRuntimeController: ObservableObject {
     @Published private(set) var detectedContainerVersion: String?
 
     private let userDefaults: UserDefaults
-    private let supportChecker: ContainerizationSupportChecking
     private let assetManager: ContainerAssetManaging
     private let runtimeManager: ContainerRuntimeManaging
     private let healthChecker: LocalRuntimeHealthChecking
@@ -206,13 +205,11 @@ final class LocalRuntimeController: ObservableObject {
 
     init(
         userDefaults: UserDefaults = .standard,
-        supportChecker: ContainerizationSupportChecking = ContainerizationSupportChecker(),
         assetManager: ContainerAssetManaging = ApplicationSupportContainerAssetManager(),
         runtimeManager: ContainerRuntimeManaging = ContainerizationRuntimeEngine(),
         healthChecker: LocalRuntimeHealthChecking = HealthEndpointChecker()
     ) {
         self.userDefaults = userDefaults
-        self.supportChecker = supportChecker
         self.assetManager = assetManager
         self.runtimeManager = runtimeManager
         self.healthChecker = healthChecker
@@ -286,11 +283,6 @@ final class LocalRuntimeController: ObservableObject {
         lastRuntimeError = nil
         recentLogs = ""
 
-        guard case .supported = supportChecker.currentSupportStatus() else {
-            applyUnsupportedState()
-            return
-        }
-
         guard let configuration = resolvedConfiguration else {
             currentManagedEndpoint = nil
             runtimeState = .stopped
@@ -326,10 +318,6 @@ final class LocalRuntimeController: ObservableObject {
         currentManagedEndpoint = nil
         detectedContainerVersion = nil
 
-        guard case .supported = supportChecker.currentSupportStatus() else {
-            applyUnsupportedState()
-            return false
-        }
 
         guard let configuration = resolvedConfiguration else {
             applyFailure(invalidConfigurationMessage)
@@ -389,10 +377,6 @@ final class LocalRuntimeController: ObservableObject {
     func stopRuntime() async {
         lastRuntimeError = nil
 
-        guard case .supported = supportChecker.currentSupportStatus() else {
-            applyUnsupportedState()
-            return
-        }
 
         let containerName = managedContainerName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !containerName.isEmpty else {
@@ -503,14 +487,6 @@ final class LocalRuntimeController: ObservableObject {
         return nil
     }
 
-    private func applyUnsupportedState() {
-        if case .unsupported(let message) = supportChecker.currentSupportStatus() {
-            runtimeState = .unsupported
-            runtimeStatusDetail = message
-            lastRuntimeError = message
-            currentManagedEndpoint = nil
-        }
-    }
 
     private func applyFailure(_ message: String) {
         runtimeState = .failed

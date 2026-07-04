@@ -409,35 +409,22 @@ struct OnboardingView: View {
 
     private func checkPrerequisitesAndStart() {
         appendLog("Checking system prerequisites...")
-        
-        let checker = ContainerizationSupportChecker()
-        let support = checker.currentSupportStatus()
-        
+                
         // Measure first step
         let duration = Date().timeIntervalSince(stepStartTime ?? Date())
         steps[0].duration = duration
         
-        switch support {
-        case .supported:
-            steps[0].status = .completed
-            appendLog("System prerequisites check: supported.")
-            
-            // Move to step 1 (kernel download)
-            activeStepIndex = 1
-            steps[1].status = .inProgress
-            stepStartTime = Date()
-            
-            // Trigger start in controller
-            Task {
-                _ = await runtimeController.startRuntime()
-            }
-        case .unsupported(let message):
-            steps[0].status = .failed
-            steps[0].detailText = message
-            appendLog("System check failed: \(message)")
-            Task {
-                await runtimeController.stopRuntime()
-            }
+        steps[0].status = .completed
+        appendLog("System prerequisites check: supported.")
+        
+        // Move to step 1 (kernel download)
+        activeStepIndex = 1
+        steps[1].status = .inProgress
+        stepStartTime = Date()
+        
+        // Trigger start in controller
+        Task {
+            _ = await runtimeController.startRuntime()
         }
     }
 

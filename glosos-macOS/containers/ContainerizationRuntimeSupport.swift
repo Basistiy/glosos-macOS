@@ -2,7 +2,7 @@
 //  ContainerizationRuntimeSupport.swift
 //  glosos-macOS
 //
-//  Created by Codex on 6/5/26.
+//  Created by EV on 6/5/26.
 //
 
 import Containerization
@@ -16,9 +16,6 @@ enum ContainerizationSupportStatus: Equatable {
     case unsupported(message: String)
 }
 
-protocol ContainerizationSupportChecking {
-    func currentSupportStatus() -> ContainerizationSupportStatus
-}
 
 struct ContainerRuntimeAssets: Equatable {
     let supportRootURL: URL
@@ -56,33 +53,6 @@ protocol ContainerRuntimeManaging {
         reference: String,
         assets: ContainerRuntimeAssets
     ) async throws
-}
-
-struct ContainerizationSupportChecker: ContainerizationSupportChecking {
-    private let processInfo: ProcessInfo
-
-    init(processInfo: ProcessInfo = .processInfo) {
-        self.processInfo = processInfo
-    }
-
-    func currentSupportStatus() -> ContainerizationSupportStatus {
-#if arch(arm64)
-        let isAppleSilicon = true
-#else
-        let isAppleSilicon = false
-#endif
-
-        guard isAppleSilicon else {
-            return .unsupported(message: "Managed containers require an Apple silicon Mac.")
-        }
-
-        let version = processInfo.operatingSystemVersion
-        guard version.majorVersion >= 26 else {
-            return .unsupported(message: "Managed containers require macOS 26 or newer.")
-        }
-
-        return .supported
-    }
 }
 
 final class ApplicationSupportContainerAssetManager: @unchecked Sendable, ContainerAssetManaging {
