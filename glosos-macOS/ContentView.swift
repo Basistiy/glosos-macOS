@@ -699,9 +699,31 @@ private struct SettingsView: View {
     private let containerImagePresets = [
         ("docker.io/evbasistyi/glosos-google-user:latest", "Google User (Docker Hub)"),
         ("docker.io/evbasistyi/glosos-local-container:latest", "Local Container (Docker Hub)"),
+        ("ghcr.io/basistiy/glosos-cerebras-user:latest", "Cerebras Container (GitHub Packages)"),
+        ("docker.io/evbasistyi/glosos-cerebras-user:latest", "Cerebras Container (Docker Hub)")
     ]
 
+    private let cerebrasModelPresets = [
+        "gpt-oss-120b",
+        "gemma-4-31b",
+        "zai-glm-4.7"
+    ]
+
+    private static func displayName(forCerebrasModel model: String) -> String {
+        switch model {
+        case "gpt-oss-120b":
+            return "OpenAI GPT OSS"
+        case "gemma-4-31b":
+            return "Gemma 4 31B"
+        case "zai-glm-4.7":
+            return "Z.ai GLM 4.7"
+        default:
+            return model
+        }
+    }
+
     @State private var geminiModelSelection: String = ""
+    @State private var cerebrasModelSelection: String = ""
     @State private var localBaseSelection: String = ""
     @State private var localModelSelection: String = ""
     @State private var containerImageSelection: String = ""
@@ -791,6 +813,30 @@ private struct SettingsView: View {
 
                                 if localModelSelection == "custom" {
                                     TextField("Custom Model Name", text: $runtimeController.managedModelName)
+                                }
+
+                            case .cerebras:
+                                Picker("Model name", selection: $cerebrasModelSelection) {
+                                    ForEach(cerebrasModelPresets, id: \.self) { preset in
+                                        Text(Self.displayName(forCerebrasModel: preset)).tag(preset)
+                                    }
+                                    Text("Custom...").tag("custom")
+                                }
+                                .pickerStyle(.menu)
+                                
+                                if cerebrasModelSelection == "custom" {
+                                    TextField("Custom Model Name", text: $runtimeController.managedModelName)
+                                }
+
+                                SecureField("Cerebras API key", text: $runtimeController.managedCerebrasAPIKey)
+
+                                HStack(spacing: 4) {
+                                    Text("Get a Cerebras API key from")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                    Link("Cerebras Console", destination: URL(string: "https://console.cerebras.ai/")!)
+                                        .font(.system(.footnote, design: .rounded).weight(.semibold))
+                                        .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
                                 }
                             }
 
@@ -1206,6 +1252,11 @@ private struct SettingsView: View {
                 runtimeController.managedModelName = newValue
             }
         }
+        .onChange(of: cerebrasModelSelection) { _, newValue in
+            if newValue != "custom" {
+                runtimeController.managedModelName = newValue
+            }
+        }
         .onChange(of: localModelSelection) { _, newValue in
             if newValue != "custom" {
                 runtimeController.managedModelName = newValue
@@ -1225,6 +1276,8 @@ private struct SettingsView: View {
                     runtimeController.managedContainerName = "glosos-local-container-macos"
                 } else if newValue == "docker.io/evbasistyi/glosos-google-user:latest" || newValue == "ghcr.io/basistiy/glosos-google-user:latest" {
                     runtimeController.managedContainerName = "glosos-google-user-macos"
+                } else if newValue == "docker.io/evbasistyi/glosos-cerebras-user:latest" || newValue == "ghcr.io/basistiy/glosos-cerebras-user:latest" {
+                    runtimeController.managedContainerName = "glosos-cerebras-user-macos"
                 }
             }
         }
@@ -1251,6 +1304,12 @@ private struct SettingsView: View {
             geminiModelSelection = runtimeController.managedModelName
         } else {
             geminiModelSelection = "custom"
+        }
+        
+        if cerebrasModelPresets.contains(runtimeController.managedModelName) {
+            cerebrasModelSelection = runtimeController.managedModelName
+        } else {
+            cerebrasModelSelection = "custom"
         }
         
         if localBasePresets.keys.contains(runtimeController.managedLocalLLMApiBase) {

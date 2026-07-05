@@ -17,7 +17,6 @@ struct LocalRuntimeControllerTests {
         let defaults = makeIsolatedDefaults()
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .unsupported(message: "Unavailable")),
             assetManager: StubAssetManager(),
             runtimeManager: StubRuntimeManager(),
             healthChecker: ImmediateHealthChecker(isHealthy: false)
@@ -59,7 +58,6 @@ struct LocalRuntimeControllerTests {
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .supported),
             assetManager: assetManager,
             runtimeManager: runtimeManager,
             healthChecker: ImmediateHealthChecker(isHealthy: true)
@@ -99,7 +97,6 @@ struct LocalRuntimeControllerTests {
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .supported),
             assetManager: assetManager,
             runtimeManager: runtimeManager,
             healthChecker: ImmediateHealthChecker(isHealthy: false)
@@ -131,7 +128,6 @@ struct LocalRuntimeControllerTests {
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .supported),
             assetManager: StubAssetManager(),
             runtimeManager: runtimeManager,
             healthChecker: ImmediateHealthChecker(isHealthy: true)
@@ -163,7 +159,6 @@ struct LocalRuntimeControllerTests {
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .supported),
             assetManager: StubAssetManager(logs: "boot failed"),
             runtimeManager: runtimeManager,
             healthChecker: SequencedHealthChecker(results: [false, true])
@@ -185,10 +180,9 @@ struct LocalRuntimeControllerTests {
         let defaults = makeIsolatedDefaults()
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(
-                status: .unsupported(message: "Managed containers require macOS 26 or newer.")
+            assetManager: StubAssetManager(
+                prepareError: RuntimePreparationError.unsupported("Managed containers require macOS 26 or newer.")
             ),
-            assetManager: StubAssetManager(),
             runtimeManager: StubRuntimeManager(),
             healthChecker: ImmediateHealthChecker(isHealthy: false)
         )
@@ -206,7 +200,6 @@ struct LocalRuntimeControllerTests {
         let defaults = makeIsolatedDefaults()
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .supported),
             assetManager: StubAssetManager(),
             runtimeManager: StubRuntimeManager(),
             healthChecker: ImmediateHealthChecker(isHealthy: false)
@@ -228,7 +221,6 @@ struct LocalRuntimeControllerTests {
 
         let controller = LocalRuntimeController(
             userDefaults: defaults,
-            supportChecker: StubSupportChecker(status: .supported),
             assetManager: StubAssetManager(
                 prepareError: RuntimePreparationError.unsupported("Storage unavailable.")
             ),
@@ -243,6 +235,42 @@ struct LocalRuntimeControllerTests {
         #expect(controller.lastRuntimeError == "Storage unavailable.")
     }
 
+    @Test
+    @MainActor
+    func managedRuntimeSupportsCerebrasConfiguration() async throws {
+        let defaults = makeIsolatedDefaults()
+        defaults.set("cerebras", forKey: "managedModelProvider")
+        defaults.set("gpt-oss-120b", forKey: "managedModelName")
+        defaults.set("secret_cerebras_key", forKey: "managedCerebrasAPIKey")
+
+        let assetManager = StubAssetManager()
+        let runtimeManager = StubRuntimeManager(
+            startResult: .success(
+                ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)
+            )
+        )
+
+        let controller = LocalRuntimeController(
+            userDefaults: defaults,
+            assetManager: assetManager,
+            runtimeManager: runtimeManager,
+            healthChecker: ImmediateHealthChecker(isHealthy: true)
+        )
+
+        let didStart = await controller.startRuntime()
+        let startInvocation = await runtimeManager.startInvocation
+
+        #expect(didStart)
+        #expect(controller.runtimeState == .running)
+        #expect(startInvocation?.configuration.modelProvider == .cerebras)
+        #expect(startInvocation?.configuration.modelName == "gpt-oss-120b")
+        #expect(startInvocation?.configuration.cerebrasAPIKey == "secret_cerebras_key")
+        
+        let envs = startInvocation?.configuration.environmentVariables ?? []
+        #expect(envs.contains("MODEL_NAME=gpt-oss-120b"))
+        #expect(envs.contains("CEREBRAS_API_KEY=secret_cerebras_key"))
+    }
+
     private func makeIsolatedDefaults() -> UserDefaults {
         let suiteName = "LocalRuntimeControllerTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -251,13 +279,7 @@ struct LocalRuntimeControllerTests {
     }
 }
 
-private struct StubSupportChecker: ContainerizationSupportChecking {
-    let status: ContainerizationSupportStatus
 
-    func currentSupportStatus() -> ContainerizationSupportStatus {
-        status
-    }
-}
 
 actor StubAssetManager: ContainerAssetManaging {
     static let sampleAssets = ContainerRuntimeAssets(

@@ -24,6 +24,7 @@ enum RuntimeMode: String, CaseIterable, Identifiable {
 enum ModelProvider: String, CaseIterable, Identifiable {
     case gemini
     case localOpenAI
+    case cerebras
 
     var id: String { rawValue }
 
@@ -33,6 +34,8 @@ enum ModelProvider: String, CaseIterable, Identifiable {
             return "Google Gemini"
         case .localOpenAI:
             return "Local LLM (OpenAI SDK / Ollama)"
+        case .cerebras:
+            return "Cerebras Inference"
         }
     }
 }
@@ -66,6 +69,7 @@ struct ManagedContainerConfiguration: Equatable {
     let googleAPIKey: String?
     let localLLMApiBase: String?
     let localLLMApiKey: String?
+    let cerebrasAPIKey: String?
 
     nonisolated var environmentVariables: [String] {
         var variables = [
@@ -86,6 +90,9 @@ struct ManagedContainerConfiguration: Equatable {
             if let localLLMApiKey {
                 variables.append("OPENAI_API_KEY=\(localLLMApiKey)")
             }
+        case .cerebras:
+            let key = (cerebrasAPIKey == nil || cerebrasAPIKey!.isEmpty) ? "placeholder_key" : cerebrasAPIKey!
+            variables.append("CEREBRAS_API_KEY=\(key)")
         }
 
         return variables
@@ -178,6 +185,12 @@ final class LocalRuntimeController: ObservableObject {
         }
     }
 
+    @Published var managedCerebrasAPIKey: String {
+        didSet {
+            userDefaults.set(managedCerebrasAPIKey, forKey: Self.managedCerebrasAPIKeyKey)
+        }
+    }
+
     @Published private(set) var runtimeState: RuntimeState = .stopped
     @Published private(set) var runtimeStatusDetail = "Stopped"
     @Published private(set) var lastRuntimeError: String?
@@ -198,6 +211,7 @@ final class LocalRuntimeController: ObservableObject {
     private static let managedModelProviderKey = "managedModelProvider"
     private static let managedLocalLLMApiBaseKey = "managedLocalLLMApiBase"
     private static let managedLocalLLMApiKeyKey = "managedLocalLLMApiKey"
+    private static let managedCerebrasAPIKeyKey = "managedCerebrasAPIKey"
     private static let agentEndpointURLKey = "agentEndpointURL"
     private static let legacyManualRuntimeMode = "manualWebSocket"
     private static let defaultManualEndpointURL = AgentEndpoint.defaultLocalBaseURLString
@@ -238,6 +252,9 @@ final class LocalRuntimeController: ObservableObject {
             ?? "http://192.168.64.1:11434/v1"
         self.managedLocalLLMApiKey = userDefaults.string(forKey: Self.managedLocalLLMApiKeyKey)
             ?? "local"
+        self.managedCerebrasAPIKey = userDefaults.string(forKey: Self.managedCerebrasAPIKeyKey)
+            ?? ProcessInfo.processInfo.environment["CEREBRAS_API_KEY"]
+            ?? ""
     }
 
     var computedEndpointURL: String {
@@ -277,6 +294,7 @@ final class LocalRuntimeController: ObservableObject {
         userDefaults.set(managedModelProvider.rawValue, forKey: Self.managedModelProviderKey)
         userDefaults.set(managedLocalLLMApiBase, forKey: Self.managedLocalLLMApiBaseKey)
         userDefaults.set(managedLocalLLMApiKey, forKey: Self.managedLocalLLMApiKeyKey)
+        userDefaults.set(managedCerebrasAPIKey, forKey: Self.managedCerebrasAPIKeyKey)
     }
 
     func refreshStatus() async {
@@ -434,6 +452,7 @@ final class LocalRuntimeController: ObservableObject {
         let googleAPIKey = managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let localLLMApiBase = managedLocalLLMApiBase.trimmingCharacters(in: .whitespacesAndNewlines)
         let localLLMApiKey = managedLocalLLMApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cerebrasAPIKey = managedCerebrasAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !image.isEmpty,
               !containerName.isEmpty,
@@ -446,6 +465,8 @@ final class LocalRuntimeController: ObservableObject {
             break
         case .localOpenAI:
             guard !localLLMApiBase.isEmpty else { return nil }
+        case .cerebras:
+            break
         }
 
         return ManagedContainerConfiguration(
@@ -456,7 +477,8 @@ final class LocalRuntimeController: ObservableObject {
             modelProvider: managedModelProvider,
             googleAPIKey: googleAPIKey.isEmpty ? nil : googleAPIKey,
             localLLMApiBase: localLLMApiBase.isEmpty ? nil : localLLMApiBase,
-            localLLMApiKey: localLLMApiKey.isEmpty ? nil : localLLMApiKey
+            localLLMApiKey: localLLMApiKey.isEmpty ? nil : localLLMApiKey,
+            cerebrasAPIKey: cerebrasAPIKey.isEmpty ? nil : cerebrasAPIKey
         )
     }
 
@@ -466,6 +488,8 @@ final class LocalRuntimeController: ObservableObject {
             return "Enter a valid image, container name, and model name for the managed runtime."
         case .localOpenAI:
             return "Enter a valid image, container name, model name, and Local API Base URL for the managed runtime."
+        case .cerebras:
+            return "Enter a valid image, container name, and model name for the managed runtime."
         }
     }
 
@@ -475,6 +499,8 @@ final class LocalRuntimeController: ObservableObject {
             return "Managed runtime is waiting for a Google API key."
         case .localOpenAI:
             return "Managed runtime is waiting for Local API Base URL."
+        case .cerebras:
+            return "Managed runtime is waiting for a Cerebras API key."
         }
     }
 
