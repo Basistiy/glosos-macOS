@@ -10,6 +10,7 @@ import Foundation
 
 enum RuntimeMode: String, CaseIterable, Identifiable {
     case managedAppleContainer
+    case manualEndpoint
     
     var id: String { rawValue }
 
@@ -17,6 +18,8 @@ enum RuntimeMode: String, CaseIterable, Identifiable {
         switch self {
         case .managedAppleContainer:
             return "Managed Container"
+        case .manualEndpoint:
+            return "Manual Endpoint"
         }
     }
 }
@@ -227,7 +230,14 @@ final class LocalRuntimeController: ObservableObject {
         self.assetManager = assetManager
         self.runtimeManager = runtimeManager
         self.healthChecker = healthChecker
-        self.runtimeMode = .managedAppleContainer
+        if let savedMode = userDefaults.string(forKey: Self.runtimeModeKey),
+           let mode = RuntimeMode(rawValue: savedMode) {
+            self.runtimeMode = mode
+        } else if userDefaults.string(forKey: "agentSocketURL") != nil {
+            self.runtimeMode = .manualEndpoint
+        } else {
+            self.runtimeMode = .managedAppleContainer
+        }
 
 
         self.managedContainerImage = userDefaults.string(forKey: Self.managedContainerImageKey)

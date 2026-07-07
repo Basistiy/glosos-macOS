@@ -36,8 +36,9 @@
   - show staged setup progress such as kernel download, init image pull, vmnet startup, container launch, and endpoint ready
 - Update distribution/configuration:
   - keep App Sandbox off
-  - add the virtualization entitlement required by Containerization-backed apps
-  - document that this path targets direct-download distribution, not Mac App Store shipping
+  - add the virtualization (`com.apple.security.virtualization`) entitlement required by Containerization-backed apps.
+  - note that VM networking (`com.apple.vm.networking`) is a restricted Apple entitlement. If it is not available in the development profile, code signing will fail. Developers without this entitlement should use the "Manual Endpoint" mode, running the container externally (e.g. via Docker or the `container` CLI service) and connecting to `127.0.0.1`.
+  - document that this path targets signed direct-download distribution, not Mac App Store shipping
 
 ## Public Interfaces / Types
 

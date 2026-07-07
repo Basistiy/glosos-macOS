@@ -848,9 +848,16 @@ private struct SettingsView: View {
                             HStack {
                                 Text("Runtime endpoint")
                                 Spacer()
-                                Text(runtimeController.computedEndpointURL)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
+                                if let endpoint = runtimeController.currentManagedEndpoint {
+                                    Link(runtimeController.computedEndpointURL, destination: endpoint.baseURL)
+                                        .font(.system(.body, design: .rounded))
+                                        .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                        .multilineTextAlignment(.trailing)
+                                } else {
+                                    Text(runtimeController.computedEndpointURL)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.trailing)
+                                }
                             }
 
                             HStack {
@@ -878,9 +885,16 @@ private struct SettingsView: View {
                             HStack {
                                 Text("Runtime status")
                                 Spacer()
-                                Text(runtimeController.runtimeStatusDetail)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
+                                if let endpoint = runtimeController.currentManagedEndpoint {
+                                    Link(runtimeController.runtimeStatusDetail, destination: endpoint.baseURL)
+                                        .font(.system(.body, design: .rounded))
+                                        .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                        .multilineTextAlignment(.trailing)
+                                } else {
+                                    Text(runtimeController.runtimeStatusDetail)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.trailing)
+                                }
                             }
 
                             if let version = runtimeController.detectedContainerVersion {
@@ -960,9 +974,16 @@ private struct SettingsView: View {
                             HStack {
                                 Text("Endpoint URL")
                                 Spacer()
-                                Text(runtimeController.computedEndpointURL)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.trailing)
+                                if let endpoint = runtimeController.currentManagedEndpoint {
+                                    Link(runtimeController.computedEndpointURL, destination: endpoint.baseURL)
+                                        .font(.system(.body, design: .rounded))
+                                        .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                        .multilineTextAlignment(.trailing)
+                                } else {
+                                    Text(runtimeController.computedEndpointURL)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.trailing)
+                                }
                             }
                         } else {
                             TextField("Endpoint URL", text: $agentController.endpointURL)
