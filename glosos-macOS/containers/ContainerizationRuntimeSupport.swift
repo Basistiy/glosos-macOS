@@ -578,6 +578,7 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         }
 
         try? await session.container.stop()
+        try? session.manager.delete(containerName)
         try? session.manager.releaseNetwork(containerName)
         self.session = nil
     }
