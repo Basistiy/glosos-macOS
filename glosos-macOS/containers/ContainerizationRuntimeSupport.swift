@@ -438,6 +438,11 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
 
         await updateStatus("Starting vmnet network...")
         let network = try VmnetNetwork()
+        if reuseCachedFilesystem {
+            // Allow the virtual network interface to settle and configure on the host before booting the VM.
+            // When reusing cached filesystem, the VM starts up very fast (2-3s) which can beat the host DHCP configuration.
+            try? await Task.sleep(for: .seconds(2.5))
+        }
 
         let imageStore = try ImageStore(path: assets.imageStoreURL)
         let initImage = try await Self.fetchImage(
@@ -458,6 +463,10 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
             imageStore: imageStore,
             network: network
         )
+
+        // Clean up any leftover container registration or network resources from previous runs (e.g. if the app crashed or terminated abruptly)
+        try? manager.delete(configuration.containerName)
+        try? manager.releaseNetwork(configuration.containerName)
 
         let stdoutWriter = try FileHandleWriter(
             url: assets.logsDirectoryURL.appendingPathComponent("\(configuration.containerName)-stdout.log")

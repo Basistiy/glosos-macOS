@@ -138,8 +138,27 @@ struct ContentView: View {
                         return
                     }
                     
-                    // Forward peer message to LLM agent
-                    agentController.sendUserMessage(newValue)
+                    let text = parseTextFromMessage(newValue).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let lowercasedText = text.lowercased()
+                    
+                    if lowercasedText == "/language" {
+                        sendPeerResponse("Current language: \(speechController.selectedLanguage.title)")
+                    } else if lowercasedText.hasPrefix("/language ") {
+                        let arg = String(text.dropFirst("/language ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let matchedLanguage = SpeechLanguage.allCases.first(where: {
+                            $0.rawValue.lowercased() == arg.lowercased() ||
+                            $0.title.lowercased() == arg.lowercased()
+                        }) {
+                            speechController.selectedLanguage = matchedLanguage
+                            sendPeerResponse("Language switched to \(matchedLanguage.title)")
+                        } else {
+                            let available = SpeechLanguage.allCases.map { $0.title }.joined(separator: ", ")
+                            sendPeerResponse("Unsupported language: \(arg). Supported languages: \(available)")
+                        }
+                    } else {
+                        // Forward peer message to LLM agent
+                        agentController.sendUserMessage(newValue)
+                    }
                 }
                 .onChange(of: authManager.token) { _, newToken in
                     if let newToken = newToken {
@@ -498,6 +517,30 @@ struct ContentView: View {
         }
 
         _ = agentController.sendUserMessage(pendingUtterance)
+    }
+
+    private func parseTextFromMessage(_ message: String) -> String {
+        guard let data = message.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+              let text = json["text"] as? String else {
+            return message
+        }
+        return text
+    }
+
+    private func sendPeerResponse(_ text: String) {
+        guard p2pController.isConnected else { return }
+        
+        let payload: [String: Any] = [
+            "type": "agent",
+            "text": text
+        ]
+        if let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            _ = p2pController.sendMessage(jsonString)
+        } else {
+            _ = p2pController.sendMessage(text)
+        }
     }
 
 

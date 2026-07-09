@@ -283,36 +283,55 @@ extension P2PConnectionController: SignalingClientDelegate {
         self.currentCallerSocketId = callerSocketId
         self.peerUsername = callerUsername
         
-        print("[P2PConnectionController] Incoming call from \(callerUsername) (\(callerSocketId)). Creating PeerConnection...")
+        statusDetail = "Fetching connection credentials..."
         
-        let pcCreated = webRTCManager.createPeerConnection(iceServers: self.turnServers)
-        guard pcCreated else {
-            statusDetail = "Failed to create PeerConnection"
-            appendSystemMessage("WebRTC error: Failed to create PeerConnection.", state: .error)
-            return
-        }
+        let apiEndpoint = self.lastSavedApiEndpoint ?? ""
+        let token = self.lastSavedToken ?? ""
         
-        statusDetail = "Negotiating connection..."
-        
-        webRTCManager.handleIncomingCall(offerSdp: offer["sdp"] as? String ?? "") { [weak self] result in
-            guard let self = self else { return }
-            guard client === self.signalingClient else { return }
-            switch result {
-            case .success(let localSdp):
-                print("[P2PConnectionController] Negotiation success. Sending SDP answer...")
-                self.signalingClient?.sendAnswer(
-                    targetSocketId: callerSocketId,
-                    answer: [
-                        "type": "answer",
-                        "sdp": localSdp.sdp
-                    ]
-                )
-                self.statusDetail = "Connecting to \(callerUsername)..."
-            case .failure(let error):
-                print("[P2PConnectionController] Negotiation failed: \(error.localizedDescription)")
-                self.statusDetail = "Failed to connect to \(callerUsername)"
-                self.appendSystemMessage("WebRTC offer processing failed: \(error.localizedDescription)", state: .error)
-                self.cleanupCall()
+        Task {
+            // Fetch fresh credentials right before creating the connection to avoid expiration
+            let servers = await fetchTurnCredentials(apiEndpoint: apiEndpoint, token: token)
+            self.turnServers = servers
+            
+            print("[P2PConnectionController] Fresh ephemeral TURN credentials loaded for incoming call: \(servers.count) servers found.")
+            
+            // Check that we haven't hung up or started a different connection in the meantime
+            guard self.signalingClient === client, self.currentCallerSocketId == callerSocketId else {
+                print("[P2PConnectionController] Call context changed during credential fetch. Aborting incoming call setup.")
+                return
+            }
+            
+            print("[P2PConnectionController] Incoming call from \(callerUsername) (\(callerSocketId)). Creating PeerConnection...")
+            
+            let pcCreated = self.webRTCManager.createPeerConnection(iceServers: self.turnServers)
+            guard pcCreated else {
+                self.statusDetail = "Failed to create PeerConnection"
+                self.appendSystemMessage("WebRTC error: Failed to create PeerConnection.", state: .error)
+                return
+            }
+            
+            self.statusDetail = "Negotiating connection..."
+            
+            self.webRTCManager.handleIncomingCall(offerSdp: offer["sdp"] as? String ?? "") { [weak self] result in
+                guard let self = self else { return }
+                guard client === self.signalingClient else { return }
+                switch result {
+                case .success(let localSdp):
+                    print("[P2PConnectionController] Negotiation success. Sending SDP answer...")
+                    self.signalingClient?.sendAnswer(
+                        targetSocketId: callerSocketId,
+                        answer: [
+                            "type": "answer",
+                            "sdp": localSdp.sdp
+                        ]
+                    )
+                    self.statusDetail = "Connecting to \(callerUsername)..."
+                case .failure(let error):
+                    print("[P2PConnectionController] Negotiation failed: \(error.localizedDescription)")
+                    self.statusDetail = "Failed to connect to \(callerUsername)"
+                    self.appendSystemMessage("WebRTC offer processing failed: \(error.localizedDescription)", state: .error)
+                    self.cleanupCall()
+                }
             }
         }
     }
