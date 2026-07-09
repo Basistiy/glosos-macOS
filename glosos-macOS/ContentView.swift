@@ -254,7 +254,7 @@ struct ContentView: View {
                         await stopManagedRuntime()
                         semaphore.signal()
                     }
-                    _ = semaphore.wait(timeout: .now() + 2.0)
+                    _ = semaphore.wait(timeout: .now() + 5.0)
                 }
             }
         }

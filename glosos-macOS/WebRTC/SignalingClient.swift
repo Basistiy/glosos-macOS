@@ -477,4 +477,14 @@ extension SignalingClient: URLSessionWebSocketDelegate {
         print("[SignalingClient] WebSocket connection closed.")
         self.handleDisconnect()
     }
+    
+    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            print("[SignalingClient] WebSocket task completed with error: \(error.localizedDescription)")
+            self.handleFailure(error)
+        } else {
+            print("[SignalingClient] WebSocket task completed.")
+            self.handleDisconnect()
+        }
+    }
 }
