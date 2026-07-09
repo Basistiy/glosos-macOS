@@ -537,6 +537,7 @@ final class LocalRuntimeController: ObservableObject {
         updateStatus: @escaping @Sendable (String) async -> Void
     ) async throws -> ManagedRuntimeEndpoint {
         do {
+            print("[LocalRuntimeController] Attempting start with cached filesystem...")
             return try await startManagedRuntime(
                 configuration: configuration,
                 assets: assets,
@@ -544,8 +545,11 @@ final class LocalRuntimeController: ObservableObject {
                 updateStatus: updateStatus
             )
         } catch {
+            print("[LocalRuntimeController] Cached runtime filesystem start failed with error: \(error.localizedDescription)")
+            print("[LocalRuntimeController] Initiating recovery... Stopping current VM.")
             await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
             await updateStatus("Cached runtime filesystem failed. Rebuilding...")
+            print("[LocalRuntimeController] Rebuilding container filesystem from scratch (reuseCachedFilesystem: false)...")
             return try await startManagedRuntime(
                 configuration: configuration,
                 assets: assets,
@@ -561,6 +565,7 @@ final class LocalRuntimeController: ObservableObject {
         reuseCachedFilesystem: Bool,
         updateStatus: @escaping @Sendable (String) async -> Void
     ) async throws -> ManagedRuntimeEndpoint {
+        print("[LocalRuntimeController] Starting managed runtime (reuseCachedFilesystem: \(reuseCachedFilesystem))...")
         let endpoint = try await runtimeManager.start(
             configuration: configuration,
             assets: assets,
@@ -568,6 +573,7 @@ final class LocalRuntimeController: ObservableObject {
             updateStatus: updateStatus
         )
 
+        print("[LocalRuntimeController] Container runtime manager started at \(endpoint.displayString). Waiting for health check...")
         runtimeStatusDetail = "Waiting for runtime endpoint..."
         let isHealthy = await healthChecker.waitUntilHealthy(
             endpoint: endpoint,
@@ -575,18 +581,23 @@ final class LocalRuntimeController: ObservableObject {
         )
 
         guard isHealthy else {
+            print("[LocalRuntimeController] Health check failed for endpoint \(endpoint.displayString).")
+            print("[LocalRuntimeController] Stopping container...")
             await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
-            recentLogs = await assetManager.recentLogs(
+            print("[LocalRuntimeController] Fetching recent logs...")
+            let logs = await assetManager.recentLogs(
                 containerName: configuration.containerName,
                 assets: assets
             )
-            throw RuntimePreparationError.failed(
-                reuseCachedFilesystem
-                    ? "Cached runtime filesystem produced an unhealthy runtime endpoint."
-                    : "Container started, but the runtime endpoint never became ready."
-            )
+            recentLogs = logs
+            print("[LocalRuntimeController] Recent container logs (bootlog/stdout/stderr):\n\(logs)")
+            let errorMsg = reuseCachedFilesystem
+                ? "Cached runtime filesystem produced an unhealthy runtime endpoint."
+                : "Container started, but the runtime endpoint never became ready."
+            throw RuntimePreparationError.failed(errorMsg)
         }
 
+        print("[LocalRuntimeController] Managed runtime is healthy at \(endpoint.displayString).")
         return endpoint
     }
 

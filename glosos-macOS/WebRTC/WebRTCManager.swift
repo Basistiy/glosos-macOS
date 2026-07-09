@@ -35,6 +35,11 @@ public final class WebRTCManager: NSObject {
     private let bufferLock = NSLock()
     private var onPlaybackFinished: (() -> Void)?
     
+    private let streamLock = NSLock()
+    private var streamBuffersCount = 0
+    private var streamCompletion: (() -> Void)?
+    private var streamFinishedSending = false
+    
     public var onIncomingAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
     
     public var isMicrophoneMuted: Bool = false {
@@ -367,6 +372,110 @@ public final class WebRTCManager: NSObject {
         activeBuffersCount = 0
         onPlaybackFinished = nil
         bufferLock.unlock()
+        
+        streamLock.lock()
+        streamBuffersCount = 0
+        streamCompletion = nil
+        streamFinishedSending = false
+        streamLock.unlock()
+    }
+    
+    public func startAudioStream(format: AVAudioFormat, completion: @escaping () -> Void) {
+        guard let player = playerNode, 
+              let micMixer = micMixerNode,
+              let mainMixer = mainMixerNode, 
+              let dest = inputDestinationNode, 
+              let inputFmt = inputFormat, 
+              let engine = player.engine else {
+            print("[WebRTCManager] [Warning] startAudioStream called but playerNode, micMixerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
+            completion()
+            return
+        }
+        
+        // Reconnect the entire input graph
+        engine.disconnectNodeOutput(player)
+        if let src = physicalInputNode {
+            engine.disconnectNodeOutput(src)
+        }
+        engine.disconnectNodeOutput(micMixer)
+        engine.disconnectNodeOutput(mainMixer)
+        
+        // Reconnect player to mainMixer
+        engine.connect(player, to: mainMixer, format: format)
+        player.volume = 1.0
+        
+        // Reconnect physical microphone to micMixer, and micMixer to mainMixer
+        if let src = physicalInputNode {
+            engine.connect(src, to: micMixer, format: inputFmt)
+            micMixer.outputVolume = 0.0
+            engine.connect(micMixer, to: mainMixer, format: inputFmt)
+        }
+        
+        // Connect mainMixer to WebRTC input destination
+        engine.connect(mainMixer, to: dest, format: inputFmt)
+        
+        streamLock.lock()
+        streamBuffersCount = 0
+        streamCompletion = completion
+        streamFinishedSending = false
+        streamLock.unlock()
+        
+        if !player.isPlaying {
+            player.play()
+        }
+        
+        print("[WebRTCManager] Reconnected WebRTC input path for streaming: player (\(format.sampleRate)Hz) & physical microphone (0.0 vol via micMixer) -> mainMixer -> destination")
+    }
+    
+    public func submitAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard let player = playerNode else { return }
+        
+        let playerOutputFormat = player.outputFormat(forBus: 0)
+        guard playerOutputFormat.channelCount == buffer.format.channelCount else {
+            print("[WebRTCManager] [Warning] Dropped streaming buffer due to channel count mismatch: player \(playerOutputFormat.channelCount) ch vs buffer \(buffer.format.channelCount) ch")
+            return
+        }
+        
+        streamLock.lock()
+        streamBuffersCount += 1
+        streamLock.unlock()
+        
+        player.scheduleBuffer(buffer) { [weak self] in
+            guard let self = self else { return }
+            self.streamLock.lock()
+            self.streamBuffersCount -= 1
+            let count = self.streamBuffersCount
+            let isFinished = self.streamFinishedSending
+            let completion = self.streamCompletion
+            if count == 0 && isFinished {
+                self.streamCompletion = nil
+            }
+            self.streamLock.unlock()
+            
+            if count == 0 && isFinished {
+                DispatchQueue.main.async {
+                    completion?()
+                }
+            }
+        }
+    }
+    
+    public func finishAudioStream() {
+        streamLock.lock()
+        streamFinishedSending = true
+        let count = streamBuffersCount
+        let completion = streamCompletion
+        if count == 0 {
+            streamCompletion = nil
+        }
+        streamLock.unlock()
+        
+        if count == 0 {
+            DispatchQueue.main.async {
+                completion?()
+            }
+        }
+        print("[WebRTCManager] Audio stream finish requested (active buffers: \(count)).")
     }
 }
 

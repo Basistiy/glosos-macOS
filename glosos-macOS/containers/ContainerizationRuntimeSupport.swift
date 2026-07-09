@@ -464,9 +464,26 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
             network: network
         )
 
+        let containerRootURL = Self.containerRootURL(
+            containerName: configuration.containerName,
+            imageStoreURL: assets.imageStoreURL
+        )
+
+        // Detect if a valid cache exists before cleanup
+        let hasValidCache = reuseCachedFilesystem && Self.cachedRuntimeFilesystemMount(for: configuration, at: containerRootURL) != nil
+        var preserveURL: URL? = nil
+        if hasValidCache {
+            preserveURL = Self.preserveCache(containerName: configuration.containerName, imageStoreURL: assets.imageStoreURL)
+        }
+
         // Clean up any leftover container registration or network resources from previous runs (e.g. if the app crashed or terminated abruptly)
         try? manager.delete(configuration.containerName)
         try? manager.releaseNetwork(configuration.containerName)
+
+        // Restore the cache immediately after registration is cleared
+        if let preserveURL {
+            Self.restoreCache(from: preserveURL, containerName: configuration.containerName, imageStoreURL: assets.imageStoreURL)
+        }
 
         let stdoutWriter = try FileHandleWriter(
             url: assets.logsDirectoryURL.appendingPathComponent("\(configuration.containerName)-stdout.log")
@@ -480,10 +497,6 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
             using: manager.imageStore,
             activity: "Pulling runtime image",
             updateStatus: updateStatus
-        )
-        let containerRootURL = Self.containerRootURL(
-            containerName: configuration.containerName,
-            imageStoreURL: assets.imageStoreURL
         )
         let cachedRootfs = reuseCachedFilesystem
             ? Self.cachedRuntimeFilesystemMount(for: configuration, at: containerRootURL)
@@ -583,13 +596,31 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
     ) async {
         let _ = assets
         guard var session, session.containerName == containerName else {
+            print("[ContainerizationRuntimeEngine] stop called, but no active session for '\(containerName)' found.")
             return
         }
 
+        print("[ContainerizationRuntimeEngine] Stopping container '\(containerName)'...")
         try? await session.container.stop()
+
+        // Preserve cache before deleting container registration
+        var preserveURL: URL? = nil
+        if let assets {
+            preserveURL = Self.preserveCache(containerName: containerName, imageStoreURL: assets.imageStoreURL)
+        }
+
+        print("[ContainerizationRuntimeEngine] Deleting container registration for '\(containerName)'...")
         try? session.manager.delete(containerName)
+        print("[ContainerizationRuntimeEngine] Releasing network resources for '\(containerName)'...")
         try? session.manager.releaseNetwork(containerName)
+
+        // Restore cache immediately after registration is deleted
+        if let preserveURL, let assets {
+            Self.restoreCache(from: preserveURL, containerName: containerName, imageStoreURL: assets.imageStoreURL)
+        }
+
         self.session = nil
+        print("[ContainerizationRuntimeEngine] Container '\(containerName)' successfully stopped and session cleared.")
     }
 
     func deleteImage(
@@ -628,15 +659,24 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         let markerURL = containerRootURL.appendingPathComponent(imageReferenceMarkerFilename)
         let rootfsURL = containerRootURL.appendingPathComponent(rootFilesystemFilename)
 
-        guard
-            let marker = try? String(contentsOf: markerURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            marker == configuration.image,
-            FileManager.default.fileExists(atPath: rootfsURL.path(percentEncoded: false))
-        else {
+        print("[ContainerizationRuntimeEngine] Verifying cached filesystem...")
+        guard let marker = try? String(contentsOf: markerURL, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines) else {
+            print("[ContainerizationRuntimeEngine] Cache validation failed: Marker file '\(imageReferenceMarkerFilename)' not found or unreadable at '\(markerURL.path)'.")
             return nil
         }
 
+        guard marker == configuration.image else {
+            print("[ContainerizationRuntimeEngine] Cache validation failed: Marker image reference mismatch. Cache has '\(marker)', configuration has '\(configuration.image)'.")
+            return nil
+        }
+
+        guard FileManager.default.fileExists(atPath: rootfsURL.path(percentEncoded: false)) else {
+            print("[ContainerizationRuntimeEngine] Cache validation failed: rootfs.ext4 file not found at '\(rootfsURL.path)'.")
+            return nil
+        }
+
+        print("[ContainerizationRuntimeEngine] Cache validation succeeded. Using cached rootfs.")
         return .block(
             format: "ext4",
             source: rootfsURL.path(percentEncoded: false),
@@ -650,7 +690,87 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         at containerRootURL: URL
     ) {
         let markerURL = containerRootURL.appendingPathComponent(imageReferenceMarkerFilename)
-        try? configuration.image.write(to: markerURL, atomically: true, encoding: .utf8)
+        print("[ContainerizationRuntimeEngine] Writing marker file to \(markerURL.path) with value: '\(configuration.image)'")
+        do {
+            try FileManager.default.createDirectory(at: containerRootURL, withIntermediateDirectories: true)
+            try configuration.image.write(to: markerURL, atomically: false, encoding: .utf8)
+            print("[ContainerizationRuntimeEngine] Successfully wrote marker file.")
+        } catch {
+            print("[ContainerizationRuntimeEngine] Failed to write marker file: \(error.localizedDescription)")
+        }
+    }
+
+    nonisolated private static func preserveCache(
+        containerName: String,
+        imageStoreURL: URL
+    ) -> URL? {
+        let containerRootURL = Self.containerRootURL(containerName: containerName, imageStoreURL: imageStoreURL)
+        let markerURL = containerRootURL.appendingPathComponent(imageReferenceMarkerFilename)
+        let rootfsURL = containerRootURL.appendingPathComponent(rootFilesystemFilename)
+
+        // Only preserve if the cache filesystem file actually exists
+        guard FileManager.default.fileExists(atPath: rootfsURL.path(percentEncoded: false)) else {
+            return nil
+        }
+
+        let preserveRootURL = imageStoreURL
+            .appendingPathComponent("cache-preserve", isDirectory: true)
+            .appendingPathComponent(containerName, isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: preserveRootURL, withIntermediateDirectories: true)
+            
+            let tempMarkerURL = preserveRootURL.appendingPathComponent(imageReferenceMarkerFilename)
+            let tempRootfsURL = preserveRootURL.appendingPathComponent(rootFilesystemFilename)
+
+            // Clean up any old files in the preserve directory first
+            try? FileManager.default.removeItem(at: tempMarkerURL)
+            try? FileManager.default.removeItem(at: tempRootfsURL)
+
+            print("[ContainerizationRuntimeEngine] Preserving cache: Moving files to \(preserveRootURL.path)")
+            
+            if FileManager.default.fileExists(atPath: markerURL.path(percentEncoded: false)) {
+                try FileManager.default.moveItem(at: markerURL, to: tempMarkerURL)
+            }
+            try FileManager.default.moveItem(at: rootfsURL, to: tempRootfsURL)
+            
+            return preserveRootURL
+        } catch {
+            print("[ContainerizationRuntimeEngine] Failed to preserve cache: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    nonisolated private static func restoreCache(
+        from preserveRootURL: URL,
+        containerName: String,
+        imageStoreURL: URL
+    ) {
+        let containerRootURL = Self.containerRootURL(containerName: containerName, imageStoreURL: imageStoreURL)
+        let tempMarkerURL = preserveRootURL.appendingPathComponent(imageReferenceMarkerFilename)
+        let tempRootfsURL = preserveRootURL.appendingPathComponent(rootFilesystemFilename)
+
+        let markerURL = containerRootURL.appendingPathComponent(imageReferenceMarkerFilename)
+        let rootfsURL = containerRootURL.appendingPathComponent(rootFilesystemFilename)
+
+        do {
+            // Re-create the container root directory since manager.delete wiped it
+            try FileManager.default.createDirectory(at: containerRootURL, withIntermediateDirectories: true)
+            
+            print("[ContainerizationRuntimeEngine] Restoring cache: Moving files back to \(containerRootURL.path)")
+            
+            if FileManager.default.fileExists(atPath: tempMarkerURL.path(percentEncoded: false)) {
+                try FileManager.default.moveItem(at: tempMarkerURL, to: markerURL)
+            }
+            if FileManager.default.fileExists(atPath: tempRootfsURL.path(percentEncoded: false)) {
+                try FileManager.default.moveItem(at: tempRootfsURL, to: rootfsURL)
+            }
+            
+            // Clean up the temporary preserve folder
+            try? FileManager.default.removeItem(at: preserveRootURL)
+        } catch {
+            print("[ContainerizationRuntimeEngine] Failed to restore cache: \(error.localizedDescription)")
+        }
     }
 
     nonisolated private static func mergeEnvironmentVariables(

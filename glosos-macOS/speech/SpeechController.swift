@@ -11,6 +11,8 @@ import Speech
 import MLX
 import MLXAudioCore
 import MLXAudioSTT
+import MLXAudioTTS
+import MLXLMCommon
 import HuggingFace
 
 enum ASRSystem: String, CaseIterable, Identifiable {
@@ -24,6 +26,27 @@ enum ASRSystem: String, CaseIterable, Identifiable {
         case .qwen: return "Qwen3 ASR (Local MLX)"
         }
     }
+}
+
+enum TTSSystem: String, CaseIterable, Identifiable {
+    case apple = "apple"
+    case qwen = "qwen"
+    
+    var id: String { self.rawValue }
+    var title: String {
+        switch self {
+        case .apple: return "Apple TTS"
+        case .qwen: return "Qwen3 TTS (Local MLX)"
+        }
+    }
+}
+
+enum QwenTTSState: Equatable {
+    case idle
+    case downloading(progress: Double, completedBytes: Int64, totalBytes: Int64)
+    case loading
+    case ready
+    case failed(message: String)
 }
 
 enum QwenASRState: Equatable {
@@ -55,8 +78,32 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    @Published var selectedTTSSystem: TTSSystem {
+        didSet {
+            guard selectedTTSSystem != oldValue else {
+                return
+            }
+
+            userDefaults.set(selectedTTSSystem.rawValue, forKey: Self.ttsSystemKey)
+            handleTTSSystemChange()
+        }
+    }
+
+    @Published var selectedQwenTTSVoice: String {
+        didSet {
+            guard selectedQwenTTSVoice != oldValue else {
+                return
+            }
+
+            userDefaults.set(selectedQwenTTSVoice, forKey: Self.selectedQwenTTSVoiceKey)
+        }
+    }
+
     @Published private(set) var qwenASRState: QwenASRState = .idle
     private var qwenModel: Qwen3ASRModel?
+
+    @Published private(set) var qwenTTSState: QwenTTSState = .idle
+    private var qwenTTSModel: SpeechGenerationModel?
 
     @Published var selectedLanguage: SpeechLanguage {
         didSet {
@@ -185,6 +232,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
     var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
+    
+    var onStartAudioStream: ((AVAudioFormat, @escaping () -> Void) -> Void)?
+    var onSubmitAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
+    var onFinishAudioStream: (() -> Void)?
+    
     var onStopPlayback: (() -> Void)?
     var onSpeechStarted: (() -> Void)?
     var conversationContextProvider: (() -> String)?
@@ -211,6 +263,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let selectedPersonalVoiceIdentifierKey = "selectedPersonalVoiceIdentifier"
     private static let useConversationContextKey = "useConversationContextForASR"
     private static let asrSystemKey = "asrSystem"
+    private static let ttsSystemKey = "ttsSystem"
+    private static let selectedQwenTTSVoiceKey = "selectedQwenTTSVoice"
     private static let vadStartThresholdKey = "vadStartThreshold"
     private static let vadStartFramesKey = "vadStartFrames"
     private static let vadEndThresholdKey = "vadEndThreshold"
@@ -242,6 +296,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let asrSystemRaw = userDefaults.string(forKey: Self.asrSystemKey) ?? ASRSystem.apple.rawValue
         let asrSystem = ASRSystem(rawValue: asrSystemRaw) ?? .apple
         self.selectedASRSystem = asrSystem
+        
+        let ttsSystemRaw = userDefaults.string(forKey: Self.ttsSystemKey) ?? TTSSystem.apple.rawValue
+        let ttsSystem = TTSSystem(rawValue: ttsSystemRaw) ?? .apple
+        self.selectedTTSSystem = ttsSystem
+        
+        self.selectedQwenTTSVoice = userDefaults.string(forKey: Self.selectedQwenTTSVoiceKey) ?? "Ryan"
         
         let startThreshold = userDefaults.object(forKey: Self.vadStartThresholdKey) as? Float ?? 0.60
         let startFrames = userDefaults.object(forKey: Self.vadStartFramesKey) as? Int ?? 2
@@ -303,6 +363,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         
         if asrSystem == .qwen {
             loadQwenModel()
+        }
+        if ttsSystem == .qwen {
+            loadQwenTTSModel()
         }
     }
 
@@ -521,6 +584,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         updateSpeechVoice()
     }
 
+    func isPlaybackCancelled() -> Bool {
+        return currentPlaybackToken == nil || currentPlaybackToken?.isCancelled == true
+    }
+
     private func beginPlayback(with text: String) {
         if let oldURL = currentPlayingFileURL {
             try? FileManager.default.removeItem(at: oldURL)
@@ -532,6 +599,70 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         
         isPreparingPlayback = true
         statusMessage = "Preparing synthesized playback..."
+
+        if selectedTTSSystem == .qwen {
+            guard let model = qwenTTSModel else {
+                log("Qwen3 TTS model not loaded.")
+                finishPlayback(wasInterrupted: false)
+                return
+            }
+            
+            isPreparingPlayback = false
+            isPlaybackAudible = true
+            isSpeaking = true
+            statusMessage = "Playing synthesized audio."
+            log("Starting streaming Qwen3 TTS.")
+            
+            let playbackToken = PlaybackToken()
+            self.currentPlaybackToken = playbackToken
+            
+            let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(model.sampleRate), channels: 1, interleaved: false)!
+            
+            self.onStartAudioStream?(targetFormat) { [weak self] in
+                guard let self = self else { return }
+                self.log("Qwen3 TTS streaming playback finished.")
+                self.finishPlayback(wasInterrupted: false)
+            }
+            
+            let submitHandler = self.onSubmitAudioBuffer
+            let finishHandler = self.onFinishAudioStream
+            let selectedVoice = self.selectedQwenTTSVoice
+            let selectedLanguageTitle = self.selectedLanguage.title
+            
+            let pcmStream = model.generatePCMBufferStream(
+                text: text,
+                voice: selectedVoice,
+                refAudio: nil,
+                refText: nil,
+                language: selectedLanguageTitle,
+                generationParameters: GenerateParameters(
+                    maxTokens: 4096,
+                    temperature: 0.9,
+                    topP: 1.0,
+                    repetitionPenalty: 1.1
+                ),
+                streamingInterval: 0.32
+            )
+            
+            Task.detached(priority: .userInitiated) { [weak self] in
+                do {
+                    for try await buffer in pcmStream {
+                        guard let self = self else { break }
+                        let isCancelled = await self.isPlaybackCancelled()
+                        if isCancelled {
+                            break
+                        }
+                        submitHandler?(buffer)
+                    }
+                    
+                    finishHandler?()
+                } catch {
+                    print("[Qwen3 TTS] Streaming generation failed: \(error)")
+                    finishHandler?()
+                }
+            }
+            return
+        }
 
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = speechVoice
@@ -1083,6 +1214,181 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private func handleASRSystemChange() {
         if selectedASRSystem == .qwen {
             loadQwenModel()
+        }
+    }
+
+    func loadQwenTTSModel() {
+        print("[Qwen3 TTS] loadQwenTTSModel called. State is: \(qwenTTSState)")
+        
+        guard qwenTTSState == .idle || {
+            if case .failed = qwenTTSState { return true }
+            return false
+        }() else {
+            print("[Qwen3 TTS] loadQwenTTSModel ignored because state is not idle or failed.")
+            return
+        }
+        
+        qwenTTSState = .downloading(progress: 0.0, completedBytes: 0, totalBytes: 0)
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                print("[Qwen3 TTS] Detached download task started.")
+                let hfToken: String? = ProcessInfo.processInfo.environment["HF_TOKEN"]
+                    ?? Bundle.main.object(forInfoDictionaryKey: "HF_TOKEN") as? String
+                
+                guard let repoID = Repo.ID(rawValue: "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16") else {
+                    throw NSError(
+                        domain: "SpeechController",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16"]
+                    )
+                }
+                
+                print("[Qwen3 TTS] Setting up custom URLSession with 4 min request timeouts...")
+                let clientConfiguration = URLSessionConfiguration.default
+                clientConfiguration.timeoutIntervalForRequest = 240.0 // 4 minutes
+                clientConfiguration.timeoutIntervalForResource = 7200.0 // 2 hours
+                clientConfiguration.urlCache = nil
+                clientConfiguration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                clientConfiguration.httpShouldUsePipelining = true
+                let session = URLSession(configuration: clientConfiguration)
+                
+                print("[Qwen3 TTS] Initializing HubClient...")
+                let client: HubClient
+                if let token = hfToken, !token.isEmpty {
+                    client = HubClient(
+                        session: session,
+                        host: HubClient.defaultHost,
+                        bearerToken: token,
+                        cache: .default
+                    )
+                } else {
+                    client = HubClient(
+                        session: session,
+                        cache: .default
+                    )
+                }
+                
+                let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
+                let modelDir = HubCache.default.cacheDirectory
+                    .appendingPathComponent("mlx-audio")
+                    .appendingPathComponent(modelSubdir)
+                
+                print("[Qwen3 TTS] Model directory resolved: \(modelDir.path)")
+                try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+                
+                print("[Qwen3 TTS] Querying repository file list from Hugging Face...")
+                let allEntries = try await client.listFiles(in: repoID, kind: .model, revision: "main", recursive: true)
+                print("[Qwen3 TTS] Retrieved file list containing \(allEntries.count) entries.")
+                
+                let filesToDownload = allEntries.filter { entry in
+                    let ext = URL(fileURLWithPath: entry.path).pathExtension.lowercased()
+                    return ext == "safetensors" || ext == "json" || ext == "txt"
+                }
+                
+                let totalBytes = filesToDownload.reduce(0) { $0 + Int64($1.size ?? 0) }
+                print("[Qwen3 TTS] Found \(filesToDownload.count) files to download (Total size: \(totalBytes) bytes)")
+                
+                let aggregator = ProgressAggregator(totalBytes: totalBytes) { completed, speed in
+                    let fraction = totalBytes > 0 ? Double(completed) / Double(totalBytes) : 0.0
+                    let speedMB = speed / (1024.0 * 1024.0)
+                    print("[Qwen3 TTS] Download progress update: \(completed) / \(totalBytes) bytes (\(String(format: "%.1f", fraction * 100))%) - Speed: \(String(format: "%.2f", speedMB)) MB/s")
+                    Task { @MainActor [weak self] in
+                        self?.qwenTTSState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
+                    }
+                }
+                
+                print("[Qwen3 TTS] Downloading files sequentially...")
+                for entry in filesToDownload {
+                    let destination = modelDir.appendingPathComponent(entry.path)
+                    let fileWeight = Int64(entry.size ?? 0)
+                    
+                    var existingSize: Int64 = 0
+                    if FileManager.default.fileExists(atPath: destination.path) {
+                        if let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path),
+                           let size = attributes[.size] as? Int64 {
+                            if size == fileWeight {
+                                print("[Qwen3 TTS] [File] Already cached: \(entry.path)")
+                                aggregator.update(file: entry.path, completed: fileWeight)
+                                continue
+                            } else {
+                                existingSize = size
+                            }
+                        }
+                    }
+                    
+                    let directory = destination.deletingLastPathComponent()
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    
+                    let url = URL(string: "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-bf16/resolve/main/\(entry.path)")!
+                    var request = URLRequest(url: url)
+                    request.cachePolicy = .reloadIgnoringLocalCacheData
+                    if let token = hfToken, !token.isEmpty {
+                        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                    }
+                    
+                    if existingSize > 0 {
+                        print("[Qwen3 TTS] [File] Resuming download for \(entry.path) from \(existingSize) bytes...")
+                        request.setValue("bytes=\(existingSize)-", forHTTPHeaderField: "Range")
+                        aggregator.update(file: entry.path, completed: existingSize)
+                    } else {
+                        print("[Qwen3 TTS] [File] Downloading: \(entry.path) (\(fileWeight) bytes)")
+                    }
+                    
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        let downloader = DataTaskStreamDownloader(
+                            destination: destination,
+                            resumeOffset: existingSize,
+                            onProgress: { completed, _ in
+                                aggregator.update(file: entry.path, completed: completed)
+                            },
+                            onComplete: {
+                                continuation.resume()
+                            },
+                            onError: { error in
+                                continuation.resume(throwing: error)
+                            }
+                        )
+                        
+                        let delegateQueue = OperationQueue()
+                        delegateQueue.qualityOfService = .userInitiated
+                        let taskSession = URLSession(configuration: clientConfiguration, delegate: downloader, delegateQueue: delegateQueue)
+                        downloader.session = taskSession
+                        
+                        let task = taskSession.dataTask(with: request)
+                        task.resume()
+                    }
+                    
+                    print("[Qwen3 TTS] [File] Finished: \(entry.path)")
+                    aggregator.update(file: entry.path, completed: fileWeight)
+                }
+                
+                print("[Qwen3 TTS] All files successfully resolved. Loading weights into memory...")
+                Task { @MainActor [weak self] in
+                    self?.qwenTTSState = .loading
+                }
+                
+                let model = try await TTS.loadModel(modelRepo: modelDir.path, modelType: "qwen3_tts")
+                
+                Task { @MainActor [weak self] in
+                    self?.qwenTTSModel = model
+                    self?.qwenTTSState = .ready
+                    self?.log("Qwen3 TTS model loaded successfully and ready.")
+                    print("[Qwen3 TTS] Model is fully loaded and ready.")
+                }
+            } catch {
+                print("[Qwen3 TTS] Error occurred: \(error.localizedDescription)")
+                Task { @MainActor [weak self] in
+                    self?.qwenTTSState = .failed(message: error.localizedDescription)
+                    self?.log("Failed to load Qwen3 TTS: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private func handleTTSSystemChange() {
+        if selectedTTSSystem == .qwen {
+            loadQwenTTSModel()
         }
     }
 

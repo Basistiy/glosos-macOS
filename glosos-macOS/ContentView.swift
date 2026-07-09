@@ -403,6 +403,15 @@ struct ContentView: View {
         speechController.onSynthesizedFile = { [weak p2pController] fileURL, completion in
             p2pController?.playAudioFile(at: fileURL, completion: completion)
         }
+        speechController.onStartAudioStream = { [weak p2pController] format, completion in
+            p2pController?.startAudioStream(format: format, completion: completion)
+        }
+        speechController.onSubmitAudioBuffer = { [weak p2pController] buffer in
+            p2pController?.submitAudioBuffer(buffer)
+        }
+        speechController.onFinishAudioStream = { [weak p2pController] in
+            p2pController?.finishAudioStream()
+        }
         speechController.onStopPlayback = { [weak p2pController] in
             p2pController?.stopAudioPlayback()
         }
@@ -1163,38 +1172,117 @@ private struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if speechController.personalVoiceAuthorizationStatus != .unsupported {
-                            Toggle("Use Personal Voice", isOn: Binding(
-                                get: { speechController.usePersonalVoice },
-                                set: { newValue in
-                                    Task {
-                                        await speechController.setUsePersonalVoice(newValue)
+                        Divider()
+
+                        Picker("TTS System", selection: $speechController.selectedTTSSystem) {
+                            ForEach(TTSSystem.allCases) { system in
+                                Text(system.title).tag(system)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        if speechController.selectedTTSSystem == .qwen {
+                            switch speechController.qwenTTSState {
+                            case .idle:
+                                Text("Select Qwen3 TTS to start download.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                            case .downloading(let progress, let completed, let total):
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView("Downloading Qwen3-TTS model...", value: progress, total: 1.0)
+                                        .progressViewStyle(.linear)
+                                    if total > 0 {
+                                        Text("\(String(format: "%.2f", Double(completed) / 1_000_000_000)) GB of \(String(format: "%.2f", Double(total) / 1_000_000_000)) GB (\(Int(progress * 100))%)")
+                                            .font(.system(.footnote, design: .rounded))
+                                            .foregroundStyle(.secondary)
+                                    } else {
+                                        Text("Initializing download...")
+                                            .font(.system(.footnote, design: .rounded))
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
-                            ))
-
-                            if speechController.usePersonalVoice {
-                                if speechController.availablePersonalVoices.isEmpty {
-                                    Text("No Personal Voices found. Please configure a Personal Voice in macOS System Settings > Accessibility > Personal Voice.")
+                            case .loading:
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Loading model weights into memory...")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                            case .ready:
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                        Text("Qwen3 TTS is ready.")
+                                            .font(.system(.footnote, design: .rounded))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    
+                                    HStack(spacing: 8) {
+                                        Text("Voice")
+                                        TextField("e.g. Ryan, Aiden, Serena, or style desc", text: $speechController.selectedQwenTTSVoice)
+                                            .textFieldStyle(.roundedBorder)
+                                    }
+                                    Text("Type 'Ryan' or 'Aiden' for English preset voices, or pass custom voice style instructions.")
+                                        .font(.system(.footnote, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                            case .failed(let message):
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundStyle(.red)
+                                        Text("Failed to load Qwen3 TTS.")
+                                            .font(.system(.body, design: .rounded))
+                                            .bold()
+                                    }
+                                    Text(message)
                                         .font(.system(.footnote, design: .rounded))
                                         .foregroundStyle(.red)
-                                } else {
-                                    Picker("Personal Voice", selection: Binding(
-                                        get: { speechController.selectedPersonalVoiceIdentifier },
-                                        set: { newValue in
-                                            speechController.selectedPersonalVoiceIdentifier = newValue
+                                    Button("Retry") {
+                                        speechController.loadQwenTTSModel()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+
+                        if speechController.selectedTTSSystem == .apple {
+                            if speechController.personalVoiceAuthorizationStatus != .unsupported {
+                                Toggle("Use Personal Voice", isOn: Binding(
+                                    get: { speechController.usePersonalVoice },
+                                    set: { newValue in
+                                        Task {
+                                            await speechController.setUsePersonalVoice(newValue)
                                         }
-                                    )) {
-                                        ForEach(speechController.availablePersonalVoices, id: \.identifier) { voice in
-                                            Text(voice.name).tag(voice.identifier as String?)
+                                    }
+                                ))
+
+                                if speechController.usePersonalVoice {
+                                    if speechController.availablePersonalVoices.isEmpty {
+                                        Text("No Personal Voices found. Please configure a Personal Voice in macOS System Settings > Accessibility > Personal Voice.")
+                                            .font(.system(.footnote, design: .rounded))
+                                            .foregroundStyle(.red)
+                                    } else {
+                                        Picker("Personal Voice", selection: Binding(
+                                            get: { speechController.selectedPersonalVoiceIdentifier },
+                                            set: { newValue in
+                                                speechController.selectedPersonalVoiceIdentifier = newValue
+                                            }
+                                        )) {
+                                            ForEach(speechController.availablePersonalVoices, id: \.identifier) { voice in
+                                                Text(voice.name).tag(voice.identifier as String?)
+                                            }
                                         }
                                     }
                                 }
+                            } else {
+                                Text("Personal Voice is not supported on this Mac.")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
                             }
-                        } else {
-                            Text("Personal Voice is not supported on this Mac.")
-                                .font(.system(.footnote, design: .rounded))
-                                .foregroundStyle(.secondary)
                         }
                     }
 

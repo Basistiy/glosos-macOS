@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		1E3D2BD72FF131F700541664 /* MLXAudioSTT in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000014 /* MLXAudioSTT */; };
+		1E3D2BD82FF131F700541664 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000015 /* MLXAudioTTS */; };
 		1EA72A952FD815BE00FC5BC6 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */; };
 		1EA72A962FD815BE00FC5BC6 /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		B10000012FE0000000000001 /* Containerization in Frameworks */ = {isa = PBXBuildFile; productRef = B10000012FE0000000000011 /* Containerization */; };
@@ -67,6 +68,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1E3D2BD72FF131F700541664 /* MLXAudioSTT in Frameworks */,
+				1E3D2BD82FF131F700541664 /* MLXAudioTTS in Frameworks */,
 				B10000012FE0000000000003 /* ContainerizationExtras in Frameworks */,
 				B10000012FE0000000000002 /* ContainerizationArchive in Frameworks */,
 				B10000012FE0000000000001 /* Containerization in Frameworks */,
@@ -142,6 +144,7 @@
 				F0A1B2C32FD6000000000011 /* MLXAudioCore */,
 				F0A1B2C32FD6000000000012 /* MLXAudioVAD */,
 				F0A1B2C32FD6000000000014 /* MLXAudioSTT */,
+				F0A1B2C32FD6000000000015 /* MLXAudioTTS */,
 			);
 			productName = "glosos-macOS";
 			productReference = 1EF1C5ED2FD0B8610011923D /* glosos-macOS.app */;
@@ -406,6 +409,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access so the app can transcribe live speech and interrupt playback.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Glosos needs access to the local network to communicate with the local VM container.";
 				INFOPLIST_KEY_NSPersonalVoiceUsageDescription = "Allow access to your Personal Voice to synthesize text-to-speech using your own voice.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Allow speech recognition so the app can transcribe spoken interruptions during playback.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -454,6 +458,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Allow microphone access so the app can transcribe live speech and interrupt playback.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Glosos needs access to the local network to communicate with the local VM container.";
 				INFOPLIST_KEY_NSPersonalVoiceUsageDescription = "Allow access to your Personal Voice to synthesize text-to-speech using your own voice.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Allow speech recognition so the app can transcribe spoken interruptions during playback.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -611,6 +616,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
 			productName = MLXAudioSTT;
+		};
+		F0A1B2C32FD6000000000015 /* MLXAudioTTS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioTTS;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

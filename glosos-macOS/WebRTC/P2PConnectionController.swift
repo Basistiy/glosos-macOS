@@ -224,6 +224,18 @@ final class P2PConnectionController: ObservableObject {
         webRTCManager.playAudioFile(at: url, completion: completion)
     }
     
+    func startAudioStream(format: AVAudioFormat, completion: @escaping () -> Void) {
+        webRTCManager.startAudioStream(format: format, completion: completion)
+    }
+    
+    func submitAudioBuffer(_ buffer: AVAudioPCMBuffer) {
+        webRTCManager.submitAudioBuffer(buffer)
+    }
+    
+    func finishAudioStream() {
+        webRTCManager.finishAudioStream()
+    }
+    
     func setMicrophoneMuted(_ isMuted: Bool) {
         webRTCManager.isMicrophoneMuted = isMuted
     }
