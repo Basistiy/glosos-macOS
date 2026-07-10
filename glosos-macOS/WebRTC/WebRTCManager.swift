@@ -112,8 +112,11 @@ public final class WebRTCManager: NSObject {
         
         self.peerConnection = pc
         
-        // Configure ADM observer
-        peerConnectionFactory.audioDeviceModule.observer = self
+        // Configure ADM observer and disable voice processing
+        let adm = peerConnectionFactory.audioDeviceModule
+        adm.observer = self
+        _ = adm.setVoiceProcessingEnabled(false)
+        adm.isVoiceProcessingBypassed = true
         
         // Add local audio track
         let audioSource = peerConnectionFactory.audioSource(with: nil)
@@ -255,6 +258,10 @@ public final class WebRTCManager: NSObject {
         bufferLock.unlock()
     }
     
+    private func monoFormat(for format: AVAudioFormat) -> AVAudioFormat {
+        return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false) ?? format
+    }
+    
     public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
         guard let player = playerNode, let mixer = mainMixerNode, let engine = player.engine, !buffers.isEmpty else {
             completion()
@@ -263,8 +270,9 @@ public final class WebRTCManager: NSObject {
         
         if let firstBuffer = buffers.first {
             engine.disconnectNodeOutput(player)
-            engine.connect(player, to: mixer, format: firstBuffer.format)
-            print("[WebRTCManager] Playing audio buffers with format: \(firstBuffer.format) (reconnected player to mainMixerNode)")
+            let connectionFormat = monoFormat(for: firstBuffer.format)
+            engine.connect(player, to: mixer, format: connectionFormat)
+            print("[WebRTCManager] Playing audio buffers with format: \(connectionFormat) (reconnected player to mainMixerNode)")
         }
         
         bufferLock.lock()
@@ -322,8 +330,9 @@ public final class WebRTCManager: NSObject {
             engine.disconnectNodeOutput(micMixer)
             engine.disconnectNodeOutput(mainMixer)
             
-            // Reconnect player to mainMixer
-            engine.connect(player, to: mainMixer, format: file.processingFormat)
+            // Reconnect player to mainMixer using mono format to force downmixing of stereo files
+            let connectionFormat = monoFormat(for: file.processingFormat)
+            engine.connect(player, to: mainMixer, format: connectionFormat)
             player.volume = 1.0
             
             // Reconnect physical microphone to micMixer, and micMixer to mainMixer
@@ -400,8 +409,9 @@ public final class WebRTCManager: NSObject {
         engine.disconnectNodeOutput(micMixer)
         engine.disconnectNodeOutput(mainMixer)
         
-        // Reconnect player to mainMixer
-        engine.connect(player, to: mainMixer, format: format)
+        // Reconnect player to mainMixer using mono stream format
+        let connectionFormat = monoFormat(for: format)
+        engine.connect(player, to: mainMixer, format: connectionFormat)
         player.volume = 1.0
         
         // Reconnect physical microphone to micMixer, and micMixer to mainMixer

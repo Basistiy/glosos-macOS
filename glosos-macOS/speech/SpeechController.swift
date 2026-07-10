@@ -673,6 +673,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             var selectedVoice = self.selectedQwenTTSVoice
             if Self.presetVoices.contains(where: { $0.id == selectedVoice.lowercased() }) {
                 selectedVoice = selectedVoice.lowercased()
+            } else {
+                print("[Qwen3 TTS] Warning: Voice '\(selectedVoice)' is not a preset voice ID. Falling back to 'ryan' to avoid model crash.")
+                selectedVoice = "ryan"
             }
             let selectedLanguageTitle = self.selectedLanguage.title
             let currentTemp = self.qwenTTSTemperature

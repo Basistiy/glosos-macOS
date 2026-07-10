@@ -247,6 +247,7 @@ final class P2PConnectionController: ObservableObject {
     // MARK: - Private Call Cleanup
     
     private func cleanupCall() {
+        guard isConnected || currentCallerSocketId != nil else { return }
         webRTCManager.cleanup()
         isConnected = false
         currentCallerSocketId = nil
@@ -266,18 +267,31 @@ extension P2PConnectionController: SignalingClientDelegate {
     public func signalingClientDidConnect(_ client: SignalingClient) {
         guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Connected to signaling server successfully.")
-        statusDetail = "Waiting for browser connection..."
-        appendSystemMessage("Ready! Log in to the web app on another device to call this client.", state: .final)
+        if isConnected || currentCallerSocketId != nil {
+            let name = peerUsername ?? "Peer"
+            statusDetail = "Connected to \(name)"
+            appendSystemMessage("Signaling connection restored.", state: .final)
+        } else {
+            statusDetail = "Waiting for browser connection..."
+            appendSystemMessage("Ready! Log in to the web app on another device to call this client.", state: .final)
+        }
     }
     
     public func signalingClientDidDisconnect(_ client: SignalingClient) {
         guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling client disconnected.")
         if signalingClient != nil {
-            statusDetail = "Disconnected from signaling server"
-            appendSystemMessage("Connection to signaling server lost.", state: .error)
+            if isConnected || currentCallerSocketId != nil {
+                statusDetail = "Signaling lost (call active)"
+                appendSystemMessage("Connection to signaling server lost. Attempting to reconnect, call remains active...", state: .final)
+            } else {
+                statusDetail = "Disconnected from signaling server"
+                appendSystemMessage("Connection to signaling server lost.", state: .error)
+                cleanupCall()
+            }
+        } else {
+            cleanupCall()
         }
-        cleanupCall()
     }
     
     public func signalingClient(_ client: SignalingClient, didReceiveIncomingCall callerSocketId: String, callerUsername: String, offer: [String: Any]) {
@@ -377,9 +391,13 @@ extension P2PConnectionController: SignalingClientDelegate {
     public func signalingClient(_ client: SignalingClient, didFailWithError error: Error) {
         guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling error: \(error.localizedDescription)")
-        statusDetail = "Signaling error"
-        appendSystemMessage("Signaling error: \(error.localizedDescription)", state: .error)
-        cleanupCall()
+        if isConnected || currentCallerSocketId != nil {
+            appendSystemMessage("Signaling error: \(error.localizedDescription). Reconnecting...", state: .final)
+        } else {
+            statusDetail = "Signaling error"
+            appendSystemMessage("Signaling error: \(error.localizedDescription)", state: .error)
+            cleanupCall()
+        }
     }
     
     public func signalingClient(_ client: SignalingClient, willAttemptReconnect attempt: Int, delay: TimeInterval) {
@@ -395,6 +413,7 @@ extension P2PConnectionController: SignalingClientDelegate {
         self.hasGivenUpReconnecting = true
         statusDetail = "Connection lost"
         appendSystemMessage("Signaling server connection lost permanently. Reconnect failed.", state: .error)
+        cleanupCall()
     }
 }
 
@@ -407,7 +426,11 @@ extension P2PConnectionController: WebRTCManagerDelegate {
         case .connected, .completed:
             // Handled when data channel opens as well
             break
-        case .disconnected, .failed, .closed:
+        case .disconnected:
+            print("[P2PConnectionController] WebRTC connection disconnected. Waiting for recovery...")
+            statusDetail = "Connection unstable"
+            appendSystemMessage("WebRTC connection unstable. Attempting to recover...", state: .final)
+        case .failed, .closed:
             print("[P2PConnectionController] WebRTC connection failed/closed. Cleaning up...")
             appendSystemMessage("WebRTC connection lost.", state: .error)
             cleanupCall()
