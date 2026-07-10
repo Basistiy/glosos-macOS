@@ -1210,7 +1210,7 @@ private struct SettingsView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             case .ready:
-                                VStack(alignment: .leading, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 12) {
                                     HStack(spacing: 6) {
                                         Image(systemName: "checkmark.circle.fill")
                                             .foregroundStyle(.green)
@@ -1219,14 +1219,108 @@ private struct SettingsView: View {
                                             .foregroundStyle(.secondary)
                                     }
                                     
-                                    HStack(spacing: 8) {
-                                        Text("Voice")
-                                        TextField("e.g. Ryan, Aiden, Serena, or style desc", text: $speechController.selectedQwenTTSVoice)
-                                            .textFieldStyle(.roundedBorder)
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        // Voice section
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Voice Preset")
+                                                .font(.system(.caption, design: .rounded))
+                                                .foregroundStyle(.secondary)
+                                                .bold()
+                                            
+                                            Picker("", selection: Binding(
+                                                get: {
+                                                    if SpeechController.presetVoices.contains(where: { $0.id == speechController.selectedQwenTTSVoice.lowercased() }) {
+                                                        return speechController.selectedQwenTTSVoice.lowercased()
+                                                    } else {
+                                                        return "custom"
+                                                    }
+                                                },
+                                                set: { newValue in
+                                                    if newValue == "custom" {
+                                                        if SpeechController.presetVoices.contains(where: { $0.id == speechController.selectedQwenTTSVoice.lowercased() }) {
+                                                            speechController.selectedQwenTTSVoice = ""
+                                                        }
+                                                    } else {
+                                                        speechController.selectedQwenTTSVoice = newValue
+                                                    }
+                                                }
+                                            )) {
+                                                ForEach(SpeechController.presetVoices) { voice in
+                                                    Text(voice.name).tag(voice.id)
+                                                }
+                                                Text("Custom Style / Description...").tag("custom")
+                                            }
+                                            .pickerStyle(.menu)
+                                            .labelsHidden()
+                                        }
+                                        
+                                        let isCustom = !SpeechController.presetVoices.contains(where: { $0.id == speechController.selectedQwenTTSVoice.lowercased() })
+                                        if isCustom {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text("Voice Style / Description")
+                                                    .font(.system(.caption, design: .rounded))
+                                                    .foregroundStyle(.secondary)
+                                                    .bold()
+                                                TextField("e.g. A cheerful middle-aged woman, slow paced", text: $speechController.selectedQwenTTSVoice)
+                                                    .textFieldStyle(.roundedBorder)
+                                            }
+                                        }
+                                        
+                                        Divider()
+                                        
+                                        // Parameters section
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            Text("Generation Parameters")
+                                                .font(.system(.caption, design: .rounded))
+                                                .foregroundStyle(.secondary)
+                                                .bold()
+                                            
+                                            // Temperature Slider
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                HStack {
+                                                    Text("Temperature (Creativity)")
+                                                        .font(.system(.footnote, design: .rounded))
+                                                    Spacer()
+                                                    Text(String(format: "%.2f", speechController.qwenTTSTemperature))
+                                                        .font(.system(.footnote, design: .monospaced))
+                                                        .bold()
+                                                }
+                                                Slider(value: $speechController.qwenTTSTemperature, in: 0.1...2.0, step: 0.05)
+                                                    .controlSize(.small)
+                                            }
+                                            
+                                            // Top P Slider
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                HStack {
+                                                    Text("Top P (Nucleus Sampling)")
+                                                        .font(.system(.footnote, design: .rounded))
+                                                    Spacer()
+                                                    Text(String(format: "%.2f", speechController.qwenTTSTopP))
+                                                        .font(.system(.footnote, design: .monospaced))
+                                                        .bold()
+                                                }
+                                                Slider(value: $speechController.qwenTTSTopP, in: 0.1...1.0, step: 0.05)
+                                                    .controlSize(.small)
+                                            }
+                                            
+                                            // Repetition Penalty Slider
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                HStack {
+                                                    Text("Repetition Penalty")
+                                                        .font(.system(.footnote, design: .rounded))
+                                                    Spacer()
+                                                    Text(String(format: "%.2f", speechController.qwenTTSRepetitionPenalty))
+                                                        .font(.system(.footnote, design: .monospaced))
+                                                        .bold()
+                                                }
+                                                Slider(value: $speechController.qwenTTSRepetitionPenalty, in: 1.0...2.0, step: 0.05)
+                                                    .controlSize(.small)
+                                            }
+                                        }
                                     }
-                                    Text("Type 'Ryan' or 'Aiden' for English preset voices, or pass custom voice style instructions.")
-                                        .font(.system(.footnote, design: .rounded))
-                                        .foregroundStyle(.secondary)
+                                    .padding(10)
+                                    .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
+                                    .cornerRadius(8)
                                 }
                             case .failed(let message):
                                 VStack(alignment: .leading, spacing: 6) {

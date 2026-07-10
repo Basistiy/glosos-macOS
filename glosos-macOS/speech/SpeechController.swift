@@ -41,6 +41,11 @@ enum TTSSystem: String, CaseIterable, Identifiable {
     }
 }
 
+struct QwenTTSVoiceOption: Hashable, Identifiable {
+    let id: String
+    let name: String
+}
+
 enum QwenTTSState: Equatable {
     case idle
     case downloading(progress: Double, completedBytes: Int64, totalBytes: Int64)
@@ -96,6 +101,39 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             }
 
             userDefaults.set(selectedQwenTTSVoice, forKey: Self.selectedQwenTTSVoiceKey)
+        }
+    }
+
+    static let presetVoices: [QwenTTSVoiceOption] = [
+        QwenTTSVoiceOption(id: "aiden", name: "Aiden (Young male, English)"),
+        QwenTTSVoiceOption(id: "dylan", name: "Dylan (Teenage male, English)"),
+        QwenTTSVoiceOption(id: "eric", name: "Eric (Western/English male)"),
+        QwenTTSVoiceOption(id: "ryan", name: "Ryan (Mature male, Chinese/English)"),
+        QwenTTSVoiceOption(id: "serena", name: "Serena (Gentle female, Chinese)"),
+        QwenTTSVoiceOption(id: "vivian", name: "Vivian (Intellectual female, Chinese)"),
+        QwenTTSVoiceOption(id: "ono_anna", name: "Ono Anna (Japanese-style female)"),
+        QwenTTSVoiceOption(id: "sohee", name: "Sohee (Korean-style female)"),
+        QwenTTSVoiceOption(id: "uncle_fu", name: "Uncle Fu (Distinctive male)")
+    ]
+
+    @Published var qwenTTSTemperature: Double {
+        didSet {
+            guard qwenTTSTemperature != oldValue else { return }
+            userDefaults.set(qwenTTSTemperature, forKey: Self.qwenTTSTemperatureKey)
+        }
+    }
+
+    @Published var qwenTTSTopP: Double {
+        didSet {
+            guard qwenTTSTopP != oldValue else { return }
+            userDefaults.set(qwenTTSTopP, forKey: Self.qwenTTSTopPKey)
+        }
+    }
+
+    @Published var qwenTTSRepetitionPenalty: Double {
+        didSet {
+            guard qwenTTSRepetitionPenalty != oldValue else { return }
+            userDefaults.set(qwenTTSRepetitionPenalty, forKey: Self.qwenTTSRepetitionPenaltyKey)
         }
     }
 
@@ -265,6 +303,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let asrSystemKey = "asrSystem"
     private static let ttsSystemKey = "ttsSystem"
     private static let selectedQwenTTSVoiceKey = "selectedQwenTTSVoice"
+    private static let qwenTTSTemperatureKey = "qwenTTSTemperature"
+    private static let qwenTTSTopPKey = "qwenTTSTopP"
+    private static let qwenTTSRepetitionPenaltyKey = "qwenTTSRepetitionPenalty"
     private static let vadStartThresholdKey = "vadStartThreshold"
     private static let vadStartFramesKey = "vadStartFrames"
     private static let vadEndThresholdKey = "vadEndThreshold"
@@ -302,6 +343,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         self.selectedTTSSystem = ttsSystem
         
         self.selectedQwenTTSVoice = userDefaults.string(forKey: Self.selectedQwenTTSVoiceKey) ?? "Ryan"
+        self.qwenTTSTemperature = userDefaults.object(forKey: Self.qwenTTSTemperatureKey) as? Double ?? 0.9
+        self.qwenTTSTopP = userDefaults.object(forKey: Self.qwenTTSTopPKey) as? Double ?? 1.0
+        self.qwenTTSRepetitionPenalty = userDefaults.object(forKey: Self.qwenTTSRepetitionPenaltyKey) as? Double ?? 1.1
         
         let startThreshold = userDefaults.object(forKey: Self.vadStartThresholdKey) as? Float ?? 0.60
         let startFrames = userDefaults.object(forKey: Self.vadStartFramesKey) as? Int ?? 2
@@ -626,8 +670,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             
             let submitHandler = self.onSubmitAudioBuffer
             let finishHandler = self.onFinishAudioStream
-            let selectedVoice = self.selectedQwenTTSVoice
+            var selectedVoice = self.selectedQwenTTSVoice
+            if Self.presetVoices.contains(where: { $0.id == selectedVoice.lowercased() }) {
+                selectedVoice = selectedVoice.lowercased()
+            }
             let selectedLanguageTitle = self.selectedLanguage.title
+            let currentTemp = self.qwenTTSTemperature
+            let currentTopP = self.qwenTTSTopP
+            let currentRepPenalty = self.qwenTTSRepetitionPenalty
             
             let pcmStream = model.generatePCMBufferStream(
                 text: text,
@@ -637,9 +687,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 language: selectedLanguageTitle,
                 generationParameters: GenerateParameters(
                     maxTokens: 4096,
-                    temperature: 0.9,
-                    topP: 1.0,
-                    repetitionPenalty: 1.1
+                    temperature: Float(currentTemp),
+                    topP: Float(currentTopP),
+                    repetitionPenalty: Float(currentRepPenalty)
                 ),
                 streamingInterval: 0.32
             )
