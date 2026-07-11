@@ -273,7 +273,9 @@ extension P2PConnectionController: SignalingClientDelegate {
             appendSystemMessage("Signaling connection restored.", state: .final)
         } else {
             statusDetail = "Waiting for browser connection..."
-            appendSystemMessage("Ready! Log in to the web app on another device to call this client.", state: .final)
+            if messages.isEmpty {
+                appendSystemMessage("Ready! Log in to the web app on another device to call this client.", state: .final)
+            }
         }
     }
     
@@ -286,7 +288,6 @@ extension P2PConnectionController: SignalingClientDelegate {
                 appendSystemMessage("Connection to signaling server lost. Attempting to reconnect, call remains active...", state: .final)
             } else {
                 statusDetail = "Disconnected from signaling server"
-                appendSystemMessage("Connection to signaling server lost.", state: .error)
                 cleanupCall()
             }
         } else {
@@ -395,7 +396,6 @@ extension P2PConnectionController: SignalingClientDelegate {
             appendSystemMessage("Signaling error: \(error.localizedDescription). Reconnecting...", state: .final)
         } else {
             statusDetail = "Signaling error"
-            appendSystemMessage("Signaling error: \(error.localizedDescription)", state: .error)
             cleanupCall()
         }
     }
@@ -404,7 +404,9 @@ extension P2PConnectionController: SignalingClientDelegate {
         guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling reconnect attempt \(attempt) in \(delay) seconds...")
         statusDetail = "Reconnecting (attempt \(attempt)/5)..."
-        appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/5)...", state: .final)
+        if isConnected || currentCallerSocketId != nil {
+            appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/5)...", state: .final)
+        }
     }
     
     public func signalingClientDidGiveUpReconnect(_ client: SignalingClient) {
@@ -412,7 +414,9 @@ extension P2PConnectionController: SignalingClientDelegate {
         print("[P2PConnectionController] Signaling client gave up reconnecting.")
         self.hasGivenUpReconnecting = true
         statusDetail = "Connection lost"
-        appendSystemMessage("Signaling server connection lost permanently. Reconnect failed.", state: .error)
+        if isConnected || currentCallerSocketId != nil {
+            appendSystemMessage("Signaling server connection lost permanently. Reconnect failed.", state: .error)
+        }
         cleanupCall()
     }
 }

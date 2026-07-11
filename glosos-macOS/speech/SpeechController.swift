@@ -279,6 +279,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     var onSpeechStarted: (() -> Void)?
     var conversationContextProvider: (() -> String)?
     private var currentPlaybackToken: PlaybackToken?
+    private var activeQwenGenerationTask: Task<Void, Never>?
+    private let taskLock = NSLock()
     
     var agentResponsesDirectoryURL: URL?
 
@@ -638,8 +640,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             currentPlayingFileURL = nil
         }
         
+        taskLock.lock()
+        defer { taskLock.unlock() }
+
         currentPlaybackToken?.isCancelled = true
         currentPlaybackToken = nil
+        activeQwenGenerationTask?.cancel()
         
         isPreparingPlayback = true
         statusMessage = "Preparing synthesized playback..."
@@ -651,22 +657,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 return
             }
             
-            isPreparingPlayback = false
-            isPlaybackAudible = true
-            isSpeaking = true
-            statusMessage = "Playing synthesized audio."
-            log("Starting streaming Qwen3 TTS.")
-            
             let playbackToken = PlaybackToken()
             self.currentPlaybackToken = playbackToken
-            
-            let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(model.sampleRate), channels: 1, interleaved: false)!
-            
-            self.onStartAudioStream?(targetFormat) { [weak self] in
-                guard let self = self else { return }
-                self.log("Qwen3 TTS streaming playback finished.")
-                self.finishPlayback(wasInterrupted: false)
-            }
             
             let submitHandler = self.onSubmitAudioBuffer
             let finishHandler = self.onFinishAudioStream
@@ -682,38 +674,64 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             let currentTopP = self.qwenTTSTopP
             let currentRepPenalty = self.qwenTTSRepetitionPenalty
             
-            let pcmStream = model.generatePCMBufferStream(
-                text: text,
-                voice: selectedVoice,
-                refAudio: nil,
-                refText: nil,
-                language: selectedLanguageTitle,
-                generationParameters: GenerateParameters(
-                    maxTokens: 4096,
-                    temperature: Float(currentTemp),
-                    topP: Float(currentTopP),
-                    repetitionPenalty: Float(currentRepPenalty)
-                ),
-                streamingInterval: 0.32
-            )
+            let oldTask = activeQwenGenerationTask
+            activeQwenGenerationTask?.cancel()
             
-            Task.detached(priority: .userInitiated) { [weak self] in
+            let newTask = Task { @MainActor in
+                if let oldTask = oldTask {
+                    _ = await oldTask.result
+                }
+                
+                if playbackToken.isCancelled {
+                    return
+                }
+
+                if let qwenModel = model as? Qwen3TTSModel {
+                    qwenModel.resetStreamingState()
+                }
+                
+                self.isPreparingPlayback = false
+                self.isPlaybackAudible = true
+                self.isSpeaking = true
+                self.statusMessage = "Playing synthesized audio."
+                self.log("Starting streaming Qwen3 TTS.")
+                
+                let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(model.sampleRate), channels: 1, interleaved: false)!
+                
+                self.onStartAudioStream?(targetFormat) { [weak self] in
+                    guard let self = self else { return }
+                    self.log("Qwen3 TTS streaming playback finished.")
+                    self.finishPlayback(wasInterrupted: false)
+                }
+                
+                let pcmStream = model.generatePCMBufferStream(
+                    text: text,
+                    voice: selectedVoice,
+                    refAudio: nil,
+                    refText: nil,
+                    language: selectedLanguageTitle,
+                    generationParameters: GenerateParameters(
+                        maxTokens: 4096,
+                        temperature: Float(currentTemp),
+                        topP: Float(currentTopP),
+                        repetitionPenalty: Float(currentRepPenalty)
+                    ),
+                    streamingInterval: 0.32
+                )
+                
                 do {
                     for try await buffer in pcmStream {
-                        guard let self = self else { break }
-                        let isCancelled = await self.isPlaybackCancelled()
-                        if isCancelled {
-                            break
+                        if !playbackToken.isCancelled && !Task.isCancelled {
+                            submitHandler?(buffer)
                         }
-                        submitHandler?(buffer)
                     }
-                    
                     finishHandler?()
                 } catch {
                     print("[Qwen3 TTS] Streaming generation failed: \(error)")
                     finishHandler?()
                 }
             }
+            activeQwenGenerationTask = newTask
             return
         }
 
@@ -1458,8 +1476,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         log("Stopping playback.")
         
+        taskLock.lock()
         currentPlaybackToken?.isCancelled = true
         currentPlaybackToken = nil
+        activeQwenGenerationTask?.cancel()
+        taskLock.unlock()
         
         if let fileURL = currentPlayingFileURL {
             try? FileManager.default.removeItem(at: fileURL)
