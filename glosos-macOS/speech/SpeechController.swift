@@ -477,13 +477,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     func preparePermissions() async {
         _ = await withCheckedContinuation { continuation in
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
+            AVCaptureDevice.requestAccess(for: .audio) { @Sendable granted in
                 continuation.resume(returning: granted)
             }
         }
 
         _ = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in
                 continuation.resume(returning: status)
             }
         }

@@ -9,6 +9,9 @@ import Foundation
 @preconcurrency import WebRTC
 import AVFoundation
 
+extension RTCSessionDescription: @unchecked Sendable {}
+extension RTCIceCandidate: @unchecked Sendable {}
+
 @MainActor
 public protocol WebRTCManagerDelegate: AnyObject {
     func webRTCManager(_ manager: WebRTCManager, didChangeConnectionState state: RTCIceConnectionState)
@@ -415,41 +418,47 @@ public final class WebRTCManager: NSObject {
         let remoteDescription = RTCSessionDescription(type: .offer, sdp: offerSdp)
         
         pc.setRemoteDescription(remoteDescription) { [weak self] error in
-            guard let self = self else { return }
-            if let error = error {
-                print("[WebRTCManager] SetRemoteDescription (Offer) failed: \(error.localizedDescription)")
-                completion(.failure(error))
-                return
-            }
-            
-            print("[WebRTCManager] SetRemoteDescription (Offer) succeeded.")
-            self.flushPendingIceCandidates()
-            
-            let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-            pc.answer(for: constraints) { [weak self] localSdp, error in
+            Task { @MainActor in
                 guard let self = self else { return }
-                
                 if let error = error {
-                    print("[WebRTCManager] CreateAnswer failed: \(error.localizedDescription)")
+                    print("[WebRTCManager] SetRemoteDescription (Offer) failed: \(error.localizedDescription)")
                     completion(.failure(error))
                     return
                 }
                 
-                guard let localSdp = localSdp else {
-                    let error = NSError(domain: "WebRTCManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "Created Answer was nil"])
-                    completion(.failure(error))
-                    return
-                }
+                print("[WebRTCManager] SetRemoteDescription (Offer) succeeded.")
+                self.flushPendingIceCandidates()
                 
-                pc.setLocalDescription(localSdp) { error in
-                    if let error = error {
-                        print("[WebRTCManager] SetLocalDescription (Answer) failed: \(error.localizedDescription)")
-                        completion(.failure(error))
-                        return
+                let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+                pc.answer(for: constraints) { [weak self] localSdp, error in
+                    Task { @MainActor in
+                        guard let self = self else { return }
+                        
+                        if let error = error {
+                            print("[WebRTCManager] CreateAnswer failed: \(error.localizedDescription)")
+                            completion(.failure(error))
+                            return
+                        }
+                        
+                        guard let localSdp = localSdp else {
+                            let error = NSError(domain: "WebRTCManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "Created Answer was nil"])
+                            completion(.failure(error))
+                            return
+                        }
+                        
+                        pc.setLocalDescription(localSdp) { error in
+                            Task { @MainActor in
+                                if let error = error {
+                                    print("[WebRTCManager] SetLocalDescription (Answer) failed: \(error.localizedDescription)")
+                                    completion(.failure(error))
+                                    return
+                                }
+                                
+                                print("[WebRTCManager] SetLocalDescription (Answer) succeeded. Sending answer...")
+                                completion(.success(localSdp))
+                            }
+                        }
                     }
-                    
-                    print("[WebRTCManager] SetLocalDescription (Answer) succeeded. Sending answer...")
-                    completion(.success(localSdp))
                 }
             }
         }

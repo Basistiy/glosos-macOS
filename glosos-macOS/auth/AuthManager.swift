@@ -264,10 +264,9 @@ public final class AuthManager: ObservableObject {
         let session = ASWebAuthenticationSession(
             url: url,
             callbackURLScheme: "glosos"
-        ) { [weak self] callbackURL, error in
-            guard let self = self else { return }
-            
+        ) { @Sendable [weak self] callbackURL, error in
             Task { @MainActor in
+                guard let self = self else { return }
                 self.isLoading = false
                 if let error = error {
                     let nsError = error as NSError
