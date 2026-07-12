@@ -61,7 +61,7 @@ enum RuntimeState: Equatable {
     }
 }
 
-struct ManagedContainerConfiguration: Equatable {
+struct ManagedContainerConfiguration: Equatable, Sendable {
     static let servicePort: UInt16 = 8000
 
     let image: String
@@ -102,11 +102,11 @@ struct ManagedContainerConfiguration: Equatable {
     }
 }
 
-protocol LocalRuntimeHealthChecking {
+protocol LocalRuntimeHealthChecking: Sendable {
     func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool
 }
 
-final class HealthEndpointChecker: LocalRuntimeHealthChecking {
+final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
     func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
 
@@ -472,11 +472,11 @@ final class LocalRuntimeController: ObservableObject {
 
         switch managedModelProvider {
         case .gemini:
-            break
+            guard !googleAPIKey.isEmpty else { return nil }
         case .localOpenAI:
             guard !localLLMApiBase.isEmpty else { return nil }
         case .cerebras:
-            break
+            guard !cerebrasAPIKey.isEmpty else { return nil }
         }
 
         return ManagedContainerConfiguration(

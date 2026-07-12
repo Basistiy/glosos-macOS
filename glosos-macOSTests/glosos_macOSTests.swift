@@ -10,6 +10,7 @@ import Testing
 import AVFoundation
 @testable import glosos_macOS
 
+@MainActor
 struct glosos_macOSTests {
 
     @Test
@@ -270,11 +271,13 @@ struct glosos_macOSTests {
                 delegateCalled = true
                 continuation.resume()
             }
-            client.delegate = delegate
-            client.connect()
+            Task {
+                await client.setDelegate(delegate)
+                await client.connect()
+            }
         }
         
-        client.disconnect()
+        await client.disconnect()
         
         #expect(delegateCalled)
     }

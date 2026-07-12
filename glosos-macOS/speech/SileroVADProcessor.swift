@@ -12,18 +12,20 @@ import MLXAudioVAD
 import HuggingFace
 
 struct SileroChunkAccumulator {
-    static let targetSampleRate = 16_000
-    static let targetChunkSize = 512
+    nonisolated static let targetSampleRate = 16_000
+    nonisolated static let targetChunkSize = 512
+
+    nonisolated init() {}
 
     private var pendingInputSamples: [Float] = []
     private var pendingResampledSamples: [Float] = []
 
-    mutating func reset() {
+    nonisolated mutating func reset() {
         pendingInputSamples.removeAll(keepingCapacity: true)
         pendingResampledSamples.removeAll(keepingCapacity: true)
     }
 
-    mutating func append(samples: [Float], sampleRate: Int) throws -> [[Float]] {
+    nonisolated mutating func append(samples: [Float], sampleRate: Int) throws -> [[Float]] {
         guard !samples.isEmpty else {
             return []
         }
@@ -49,7 +51,7 @@ struct SileroChunkAccumulator {
         return drainChunks()
     }
 
-    private mutating func drainChunks() -> [[Float]] {
+    nonisolated private mutating func drainChunks() -> [[Float]] {
         var chunks: [[Float]] = []
 
         while pendingResampledSamples.count >= Self.targetChunkSize {
@@ -80,7 +82,7 @@ struct VADSpeechStateMachine {
     private var consecutiveSpeechFrames = 0
     private var consecutiveSilenceFrames = 0
 
-    init(
+    nonisolated init(
         startThreshold: Float = 0.60,
         startFrames: Int = 2,
         endThreshold: Float = 0.35,
@@ -94,7 +96,7 @@ struct VADSpeechStateMachine {
         self.chunkDuration = chunkDuration
     }
 
-    mutating func reset() {
+    nonisolated mutating func reset() {
         isSpeechActive = false
         speechStartTime = nil
         lastSpeechTime = nil
@@ -102,7 +104,7 @@ struct VADSpeechStateMachine {
         consecutiveSilenceFrames = 0
     }
 
-    mutating func ingest(probability: Float, now: TimeInterval) -> Event {
+    nonisolated mutating func ingest(probability: Float, now: TimeInterval) -> Event {
         if isSpeechActive {
             if probability < endThreshold {
                 consecutiveSilenceFrames += 1
@@ -141,7 +143,7 @@ struct VADSpeechStateMachine {
     }
 }
 
-final class SileroVADProcessor: @unchecked Sendable {
+public actor SileroVADProcessor {
     private static let modelRepository = "mlx-community/silero-vad"
 
     private enum ModelState {
@@ -151,17 +153,15 @@ final class SileroVADProcessor: @unchecked Sendable {
         case failed(message: String)
     }
 
-    private let processingQueue = DispatchQueue(label: "com.glosos.silero-vad")
-    private let callbackLock = NSLock()
     private let logHandler: @Sendable (String) -> Void
 
     private var modelState: ModelState = .idle
     private var chunkAccumulator = SileroChunkAccumulator()
     private var stateMachine = VADSpeechStateMachine()
-    private var onSpeechStartedClosure: (@Sendable () -> Void)?
-    private var onSpeechEndedClosure: (@Sendable () -> Void)?
+    private var onSpeechStartedClosure: (@Sendable @MainActor () -> Void)?
+    private var onSpeechEndedClosure: (@Sendable @MainActor () -> Void)?
 
-    init(
+    public init(
         startThreshold: Float = 0.60,
         startFrames: Int = 2,
         endThreshold: Float = 0.35,
@@ -177,80 +177,69 @@ final class SileroVADProcessor: @unchecked Sendable {
         )
     }
 
-    var isReady: Bool {
-        processingQueue.sync {
-            if case .ready = modelState {
-                return true
-            }
-            return false
+    public var isReady: Bool {
+        if case .ready = modelState {
+            return true
         }
+        return false
     }
 
-    var onSpeechStarted: (@Sendable () -> Void)? {
-        get {
-            callbackLock.lock()
-            defer { callbackLock.unlock() }
-            return onSpeechStartedClosure
-        }
-        set {
-            callbackLock.lock()
-            onSpeechStartedClosure = newValue
-            callbackLock.unlock()
-        }
+    public var onSpeechStarted: (@Sendable @MainActor () -> Void)? {
+        get { onSpeechStartedClosure }
+        set { onSpeechStartedClosure = newValue }
     }
 
-    var onSpeechEnded: (@Sendable () -> Void)? {
-        get {
-            callbackLock.lock()
-            defer { callbackLock.unlock() }
-            return onSpeechEndedClosure
-        }
-        set {
-            callbackLock.lock()
-            onSpeechEndedClosure = newValue
-            callbackLock.unlock()
-        }
+    public var onSpeechEnded: (@Sendable @MainActor () -> Void)? {
+        get { onSpeechEndedClosure }
+        set { onSpeechEndedClosure = newValue }
     }
 
-    func updateThresholds(startThreshold: Float, startFrames: Int, endThreshold: Float, endFrames: Int) {
-        processingQueue.async {
-            self.stateMachine = VADSpeechStateMachine(
-                startThreshold: startThreshold,
-                startFrames: startFrames,
-                endThreshold: endThreshold,
-                endFrames: endFrames
-            )
-            self.logHandler("Silero VAD parameters updated: startThreshold=\(startThreshold), startFrames=\(startFrames), endThreshold=\(endThreshold), endFrames=\(endFrames)")
-        }
+    public func setOnSpeechStarted(_ closure: (@Sendable @MainActor () -> Void)?) {
+        self.onSpeechStartedClosure = closure
     }
 
-    func loadModelIfNeeded() {
-        processingQueue.async {
-            guard case .idle = self.modelState else {
-                return
-            }
+    public func setOnSpeechEnded(_ closure: (@Sendable @MainActor () -> Void)?) {
+        self.onSpeechEndedClosure = closure
+    }
 
-            self.modelState = .loading
-            self.logHandler("Loading Silero VAD model.")
+    public func updateThresholds(startThreshold: Float, startFrames: Int, endThreshold: Float, endFrames: Int) {
+        self.stateMachine = VADSpeechStateMachine(
+            startThreshold: startThreshold,
+            startFrames: startFrames,
+            endThreshold: endThreshold,
+            endFrames: endFrames
+        )
+        self.logHandler("Silero VAD parameters updated: startThreshold=\(startThreshold), startFrames=\(startFrames), endThreshold=\(endThreshold), endFrames=\(endFrames)")
+    }
 
-            Task {
-                do {
-                    let model = try await self.loadModel()
-                    self.processingQueue.async {
-                        self.modelState = .ready(model: model, state: nil)
-                        self.chunkAccumulator.reset()
-                        self.stateMachine.reset()
-                        self.logHandler("Silero VAD ready.")
-                    }
-                } catch {
-                    self.processingQueue.async {
-                        let message = error.localizedDescription
-                        self.modelState = .failed(message: message)
-                        self.logHandler("Silero VAD unavailable. Falling back to Apple Speech only. Error: \(message)")
-                    }
-                }
+    public func loadModelIfNeeded() {
+        guard case .idle = modelState else {
+            return
+        }
+
+        modelState = .loading
+        logHandler("Loading Silero VAD model.")
+
+        Task {
+            do {
+                let model = try await loadModel()
+                self.finalizeModelLoading(model: model)
+            } catch {
+                self.failModelLoading(message: error.localizedDescription)
             }
         }
+    }
+
+    private func finalizeModelLoading(model: SileroVAD) {
+        self.modelState = .ready(model: model, state: nil)
+        self.chunkAccumulator.reset()
+        self.stateMachine.reset()
+        self.logHandler("Silero VAD ready.")
+    }
+
+    private func failModelLoading(message: String) {
+        self.modelState = .failed(message: message)
+        self.logHandler("Silero VAD unavailable. Falling back to Apple Speech only. Error: \(message)")
     }
 
     private func loadModel() async throws -> SileroVAD {
@@ -338,81 +327,85 @@ final class SileroVADProcessor: @unchecked Sendable {
         }
     }
 
-    func resetSession() {
-        processingQueue.async {
-            self.chunkAccumulator.reset()
-            self.stateMachine.reset()
+    public func resetSession() {
+        self.chunkAccumulator.reset()
+        self.stateMachine.reset()
 
-            if case let .ready(model, _) = self.modelState {
-                self.modelState = .ready(model: model, state: nil)
-            }
+        if case let .ready(model, _) = self.modelState {
+            self.modelState = .ready(model: model, state: nil)
         }
     }
 
-    func append(samples: [Float], sampleRate: Int) {
-        processingQueue.async {
-            guard case let .ready(model, currentState) = self.modelState else {
+    public func append(samples: [Float], sampleRate: Int) {
+        guard case let .ready(model, currentState) = self.modelState else {
+            return
+        }
+
+        do {
+            let chunks = try self.chunkAccumulator.append(samples: samples, sampleRate: sampleRate)
+            guard !chunks.isEmpty else {
+                self.modelState = .ready(model: model, state: currentState)
                 return
             }
 
-            do {
-                let chunks = try self.chunkAccumulator.append(samples: samples, sampleRate: sampleRate)
-                guard !chunks.isEmpty else {
-                    self.modelState = .ready(model: model, state: currentState)
-                    return
+            var streamState = currentState
+
+            for chunk in chunks {
+                if streamState == nil {
+                    streamState = try model.initialState(sampleRate: SileroChunkAccumulator.targetSampleRate)
                 }
 
-                var streamState = currentState
+                let input = MLXArray(chunk)
+                let (probabilityArray, nextState) = try model.feed(
+                    chunk: input,
+                    state: streamState,
+                    sampleRate: SileroChunkAccumulator.targetSampleRate
+                )
+                streamState = nextState
 
-                for chunk in chunks {
-                    if streamState == nil {
-                        streamState = try model.initialState(sampleRate: SileroChunkAccumulator.targetSampleRate)
+                let probability = probabilityArray[0].item(Float.self)
+                switch self.stateMachine.ingest(probability: probability, now: Date().timeIntervalSinceReferenceDate) {
+                case .none:
+                    break
+                case .speechStarted(let loggedProbability):
+                    self.logHandler("Silero VAD detected speech start. p=\(String(format: "%.3f", loggedProbability))")
+                    if let closure = self.onSpeechStartedClosure {
+                        Task { @MainActor in
+                            closure()
+                        }
                     }
-
-                    let input = MLXArray(chunk)
-                    let (probabilityArray, nextState) = try model.feed(
-                        chunk: input,
-                        state: streamState,
-                        sampleRate: SileroChunkAccumulator.targetSampleRate
-                    )
-                    streamState = nextState
-
-                    let probability = probabilityArray[0].item(Float.self)
-                    switch self.stateMachine.ingest(probability: probability, now: Date().timeIntervalSinceReferenceDate) {
-                    case .none:
-                        break
-                    case .speechStarted(let loggedProbability):
-                        self.logHandler("Silero VAD detected speech start. p=\(String(format: "%.3f", loggedProbability))")
-                        self.onSpeechStarted?()
-                    case .speechEnded(let loggedProbability):
-                        self.logHandler("Silero VAD detected speech end. p=\(String(format: "%.3f", loggedProbability))")
-                        self.onSpeechEnded?()
+                case .speechEnded(let loggedProbability):
+                    self.logHandler("Silero VAD detected speech end. p=\(String(format: "%.3f", loggedProbability))")
+                    if let closure = self.onSpeechEndedClosure {
+                        Task { @MainActor in
+                            closure()
+                        }
                     }
                 }
-
-                self.modelState = .ready(model: model, state: streamState)
-            } catch {
-                self.logHandler("Silero VAD processing error. Falling back to Apple Speech only. Error: \(error.localizedDescription)")
-                self.modelState = .failed(message: error.localizedDescription)
-                self.chunkAccumulator.reset()
-                self.stateMachine.reset()
             }
+
+            self.modelState = .ready(model: model, state: streamState)
+        } catch {
+            self.logHandler("Silero VAD processing error. Falling back to Apple Speech only. Error: \(error.localizedDescription)")
+            self.modelState = .failed(message: error.localizedDescription)
+            self.chunkAccumulator.reset()
+            self.stateMachine.reset()
         }
     }
 }
 
-private final class ModelDownloadProgressReporter: @unchecked Sendable {
+private nonisolated final class ModelDownloadProgressReporter: @unchecked Sendable {
     private let modelName: String
     private let logHandler: @Sendable (String) -> Void
     private let lock = NSLock()
     private var lastLoggedBucket = -1
 
-    init(modelName: String, logHandler: @escaping @Sendable (String) -> Void) {
+    nonisolated init(modelName: String, logHandler: @escaping @Sendable (String) -> Void) {
         self.modelName = modelName
         self.logHandler = logHandler
     }
 
-    func report(_ progress: Progress) {
+    nonisolated func report(_ progress: Progress) {
         guard progress.totalUnitCount > 0 else {
             return
         }

@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 
+@MainActor
 class PowerAssertionManager: ObservableObject {
     static let shared = PowerAssertionManager()
     

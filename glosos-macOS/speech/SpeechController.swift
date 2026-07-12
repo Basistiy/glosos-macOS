@@ -15,6 +15,10 @@ import MLXAudioTTS
 import MLXLMCommon
 import HuggingFace
 
+extension Qwen3ASRModel: @unchecked Sendable {}
+extension Qwen3TTSModel: @unchecked Sendable {}
+extension AVAudioPCMBuffer: @unchecked Sendable {}
+
 enum ASRSystem: String, CaseIterable, Identifiable {
     case apple = "apple"
     case qwen = "qwen"
@@ -194,12 +198,19 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         didSet {
             guard vadStartThreshold != oldValue else { return }
             userDefaults.set(vadStartThreshold, forKey: Self.vadStartThresholdKey)
-            vadProcessor?.updateThresholds(
-                startThreshold: vadStartThreshold,
-                startFrames: vadStartFrames,
-                endThreshold: vadEndThreshold,
-                endFrames: vadEndFrames
-            )
+            let vad = self.vadProcessor
+            let startT = vadStartThreshold
+            let startF = vadStartFrames
+            let endT = vadEndThreshold
+            let endF = vadEndFrames
+            Task {
+                await vad?.updateThresholds(
+                    startThreshold: startT,
+                    startFrames: startF,
+                    endThreshold: endT,
+                    endFrames: endF
+                )
+            }
         }
     }
 
@@ -207,12 +218,19 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         didSet {
             guard vadStartFrames != oldValue else { return }
             userDefaults.set(vadStartFrames, forKey: Self.vadStartFramesKey)
-            vadProcessor?.updateThresholds(
-                startThreshold: vadStartThreshold,
-                startFrames: vadStartFrames,
-                endThreshold: vadEndThreshold,
-                endFrames: vadEndFrames
-            )
+            let vad = self.vadProcessor
+            let startT = vadStartThreshold
+            let startF = vadStartFrames
+            let endT = vadEndThreshold
+            let endF = vadEndFrames
+            Task {
+                await vad?.updateThresholds(
+                    startThreshold: startT,
+                    startFrames: startF,
+                    endThreshold: endT,
+                    endFrames: endF
+                )
+            }
         }
     }
 
@@ -220,12 +238,19 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         didSet {
             guard vadEndThreshold != oldValue else { return }
             userDefaults.set(vadEndThreshold, forKey: Self.vadEndThresholdKey)
-            vadProcessor?.updateThresholds(
-                startThreshold: vadStartThreshold,
-                startFrames: vadStartFrames,
-                endThreshold: vadEndThreshold,
-                endFrames: vadEndFrames
-            )
+            let vad = self.vadProcessor
+            let startT = vadStartThreshold
+            let startF = vadStartFrames
+            let endT = vadEndThreshold
+            let endF = vadEndFrames
+            Task {
+                await vad?.updateThresholds(
+                    startThreshold: startT,
+                    startFrames: startF,
+                    endThreshold: endT,
+                    endFrames: endF
+                )
+            }
         }
     }
 
@@ -233,12 +258,19 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         didSet {
             guard vadEndFrames != oldValue else { return }
             userDefaults.set(vadEndFrames, forKey: Self.vadEndFramesKey)
-            vadProcessor?.updateThresholds(
-                startThreshold: vadStartThreshold,
-                startFrames: vadStartFrames,
-                endThreshold: vadEndThreshold,
-                endFrames: vadEndFrames
-            )
+            let vad = self.vadProcessor
+            let startT = vadStartThreshold
+            let startF = vadStartFrames
+            let endT = vadEndThreshold
+            let endF = vadEndFrames
+            Task {
+                await vad?.updateThresholds(
+                    startThreshold: startT,
+                    startFrames: startF,
+                    endThreshold: endT,
+                    endFrames: endF
+                )
+            }
         }
     }
 
@@ -268,19 +300,18 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         vadEndFrames * 32
     }
 
-    var onSynthesizedBuffers: (([AVAudioPCMBuffer], @escaping () -> Void) -> Void)?
-    var onSynthesizedFile: ((URL, @escaping () -> Void) -> Void)?
+    var onSynthesizedBuffers: (@Sendable @MainActor ([AVAudioPCMBuffer], @escaping @Sendable @MainActor () -> Void) -> Void)?
+    var onSynthesizedFile: (@Sendable @MainActor (URL, @escaping @Sendable @MainActor () -> Void) -> Void)?
     
-    var onStartAudioStream: ((AVAudioFormat, @escaping () -> Void) -> Void)?
-    var onSubmitAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
-    var onFinishAudioStream: (() -> Void)?
+    var onStartAudioStream: (@Sendable @MainActor (AVAudioFormat, @escaping @Sendable @MainActor () -> Void) -> Void)?
+    var onSubmitAudioBuffer: (@Sendable @MainActor (AVAudioPCMBuffer) -> Void)?
+    var onFinishAudioStream: (@Sendable @MainActor () -> Void)?
     
-    var onStopPlayback: (() -> Void)?
-    var onSpeechStarted: (() -> Void)?
-    var conversationContextProvider: (() -> String)?
-    private var currentPlaybackToken: PlaybackToken?
+    var onStopPlayback: (@Sendable @MainActor () -> Void)?
+    var onSpeechStarted: (@Sendable @MainActor () -> Void)?
+    var conversationContextProvider: (@Sendable @MainActor () -> String)?
+    private var currentPlaybackToken: PlaybackCancellationBox?
     private var activeQwenGenerationTask: Task<Void, Never>?
-    private let taskLock = NSLock()
     
     var agentResponsesDirectoryURL: URL?
 
@@ -395,17 +426,16 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 print(SpeechController.formatLog("[VAD] \(message)"))
             }
         )
-        self.vadProcessor?.onSpeechStarted = { [weak self] in
-            Task { @MainActor in
+        let vad = self.vadProcessor
+        Task {
+            await vad?.setOnSpeechStarted { [weak self] in
                 self?.handleSpeechStarted()
             }
-        }
-        self.vadProcessor?.onSpeechEnded = { [weak self] in
-            Task { @MainActor in
+            await vad?.setOnSpeechEnded { [weak self] in
                 self?.handleSpeechEnded()
             }
+            await vad?.loadModelIfNeeded()
         }
-        self.vadProcessor?.loadModelIfNeeded()
         
         if asrSystem == .qwen {
             loadQwenModel()
@@ -480,7 +510,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         isListeningContinuously = true
-        vadProcessor?.resetSession()
+        await vadProcessor?.resetSession()
         refreshStatusMessage()
         log("Started listening to WebRTC stream for VAD-segmented recording.")
     }
@@ -513,7 +543,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 }
             }
             
-            vadProcessor?.append(samples: samples, sampleRate: Int(buffer.format.sampleRate))
+            let vad = self.vadProcessor
+            let rate = Int(buffer.format.sampleRate)
+            Task {
+                await vad?.append(samples: samples, sampleRate: rate)
+            }
         }
         
         if isRecordingUtterance {
@@ -640,9 +674,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             currentPlayingFileURL = nil
         }
         
-        taskLock.lock()
-        defer { taskLock.unlock() }
-
         currentPlaybackToken?.isCancelled = true
         currentPlaybackToken = nil
         activeQwenGenerationTask?.cancel()
@@ -657,7 +688,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 return
             }
             
-            let playbackToken = PlaybackToken()
+            let playbackToken = PlaybackCancellationBox()
             self.currentPlaybackToken = playbackToken
             
             let submitHandler = self.onSubmitAudioBuffer
@@ -750,17 +781,12 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             statusMessage = "Playing synthesized audio."
             log("Starting speech synthesis to WebRTC audio file.")
             
-            let playbackToken = PlaybackToken()
+            let playbackToken = PlaybackCancellationBox()
             self.currentPlaybackToken = playbackToken
             
-            Task.detached(priority: .userInitiated) { [weak self] in
-                guard let self = self else {
-                    print("[SpeechController] [Error] Self is nil in synthesis task")
-                    return
-                }
-                
+            Task {
                 print("[SpeechController] Starting background synthesis task for text: '\(text)'")
-                let voice = await self.speechVoice
+                let voice = self.speechVoice
                 
                 let runUtterance = AVSpeechUtterance(string: text)
                 runUtterance.voice = voice
@@ -768,9 +794,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 
                 try? FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
                 
+                let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
+                let token = playbackToken
+                let url = fileURL
+                
                 // We will use a continuation to suspend this task until the callbacks finish.
                 let synthesisSuccess = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                    class SynthesisState {
+                    final class SynthesisState: @unchecked Sendable {
                         var audioFile: AVAudioFile? = nil
                         var converter: AVAudioConverter? = nil
                         var bufferCount = 0
@@ -779,11 +809,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     }
                     
                     let state = SynthesisState()
-                    let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
                     
                     print("[SpeechController] Invoking playbackSynthesizer.write...")
                     self.playbackSynthesizer.write(runUtterance) { (buffer: AVAudioBuffer) in
-                        if playbackToken.isCancelled {
+                        if token.isCancelled {
                             state.writeFailed = true
                             state.audioFile = nil
                             if !state.continuationFinished {
@@ -873,7 +902,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                                 if state.audioFile == nil {
                                     print("[SpeechController] Initializing AVAudioFile with target format settings: \(targetFormat.settings)")
                                     state.audioFile = try AVAudioFile(
-                                        forWriting: fileURL,
+                                        forWriting: url,
                                         settings: targetFormat.settings,
                                         commonFormat: targetFormat.commonFormat,
                                         interleaved: targetFormat.isInterleaved
@@ -903,56 +932,50 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 }
                 print("[SpeechController] File check: path='\(pathStr)', exists=\(fileExists), size=\(fileSize) bytes")
                 
-                await MainActor.run { [weak self] in
-                    guard let self = self else {
-                        print("[SpeechController] [Error] Self became nil in MainActor completion")
-                        return
-                    }
-                    print("[SpeechController] MainActor completion block: isSpeaking=\(self.isSpeaking)")
-                    guard self.isSpeaking && !playbackToken.isCancelled else {
-                        print("[SpeechController] [Warning] isSpeaking is false or cancelled, aborting playback")
-                        try? FileManager.default.removeItem(at: fileURL)
-                        return
-                    }
+                print("[SpeechController] MainActor completion block: isSpeaking=\(self.isSpeaking)")
+                guard self.isSpeaking && !playbackToken.isCancelled else {
+                    print("[SpeechController] [Warning] isSpeaking is false or cancelled, aborting playback")
+                    try? FileManager.default.removeItem(at: fileURL)
+                    return
+                }
+                
+                if synthesisSuccess && fileExists && fileSize > 0 {
+                    self.log("Speech synthesis written successfully to file: \(pathStr). Initiating WebRTC playback...")
+                    self.currentPlayingFileURL = fileURL
                     
-                    if synthesisSuccess && fileExists && fileSize > 0 {
-                        self.log("Speech synthesis written successfully to file: \(pathStr). Initiating WebRTC playback...")
-                        self.currentPlayingFileURL = fileURL
-                        
-                        if let onSynthesizedFile = self.onSynthesizedFile {
-                            onSynthesizedFile(fileURL) { [weak self] in
-                                guard let self = self else {
-                                    try? FileManager.default.removeItem(at: fileURL)
-                                    return
-                                }
-                                guard self.isSpeaking && !playbackToken.isCancelled else {
-                                    if self.currentPlayingFileURL == fileURL {
-                                        self.currentPlayingFileURL = nil
-                                    }
-                                    try? FileManager.default.removeItem(at: fileURL)
-                                    return
-                                }
-                                self.log("Speech synthesis playback via WebRTC finished.")
+                    if let onSynthesizedFile = self.onSynthesizedFile {
+                        onSynthesizedFile(fileURL) { [weak self] in
+                            guard let self = self else {
+                                try? FileManager.default.removeItem(at: fileURL)
+                                return
+                            }
+                            guard self.isSpeaking && !playbackToken.isCancelled else {
                                 if self.currentPlayingFileURL == fileURL {
                                     self.currentPlayingFileURL = nil
                                 }
-                                self.finishPlayback(wasInterrupted: false)
                                 try? FileManager.default.removeItem(at: fileURL)
-                                print("[SpeechController] Deleted synthesized audio file: \(pathStr)")
+                                return
                             }
-                        } else {
-                            print("[SpeechController] [Warning] onSynthesizedFile callback is nil")
+                            self.log("Speech synthesis playback via WebRTC finished.")
                             if self.currentPlayingFileURL == fileURL {
                                 self.currentPlayingFileURL = nil
                             }
                             self.finishPlayback(wasInterrupted: false)
                             try? FileManager.default.removeItem(at: fileURL)
+                            print("[SpeechController] Deleted synthesized audio file: \(pathStr)")
                         }
                     } else {
-                        print("[SpeechController] [Error] File writing failed, file does not exist, or size is 0")
+                        print("[SpeechController] [Warning] onSynthesizedFile callback is nil")
+                        if self.currentPlayingFileURL == fileURL {
+                            self.currentPlayingFileURL = nil
+                        }
                         self.finishPlayback(wasInterrupted: false)
                         try? FileManager.default.removeItem(at: fileURL)
                     }
+                } else {
+                    print("[SpeechController] [Error] File writing failed, file does not exist, or size is 0")
+                    self.finishPlayback(wasInterrupted: false)
+                    try? FileManager.default.removeItem(at: fileURL)
                 }
             }
         } else {
@@ -1081,28 +1104,23 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let language = selectedLanguage.rawValue
         let context = useConversationContext ? (conversationContextProvider?() ?? "") : ""
         
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self = self else {
-                try? FileManager.default.removeItem(at: url)
-                return
-            }
-            
+        Task { @MainActor in
             var recognizedText: String? = nil
             do {
                 self.log("Loading and resampling audio for Qwen3 ASR...")
                 let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
                 
                 self.log("Running Qwen3 ASR generation with context length: \(context.count)...")
-                let output = model.generate(audio: audioArray, context: context, language: language)
-                let text = output.text
+                let text = await Task.detached(priority: .userInitiated) { () -> String in
+                    let output = model.generate(audio: audioArray, context: context, language: language)
+                    return output.text
+                }.value
                 
                 self.log("Qwen3 ASR Result: \(text)")
                 recognizedText = text
                 
-                await MainActor.run {
-                    self.liveTranscript = text
-                    self.finalizedUtterance = TranscribedUtterance(text: text)
-                }
+                self.liveTranscript = text
+                self.finalizedUtterance = TranscribedUtterance(text: text)
             } catch {
                 self.log("Qwen3 ASR transcription failed: \(error.localizedDescription)")
             }
@@ -1183,12 +1201,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let totalBytes = filesToDownload.reduce(0) { $0 + Int64($1.size ?? 0) }
                 print("[Qwen3 ASR] Found \(filesToDownload.count) files to download (Total size: \(totalBytes) bytes)")
                 
-                let aggregator = ProgressAggregator(totalBytes: totalBytes) { completed, speed in
+                let aggregator = ProgressAggregator(totalBytes: totalBytes) { [weak self] completed, speed in
                     let fraction = totalBytes > 0 ? Double(completed) / Double(totalBytes) : 0.0
                     let speedMB = speed / (1024.0 * 1024.0)
                     print("[Qwen3 ASR] Download progress update: \(completed) / \(totalBytes) bytes (\(String(format: "%.1f", fraction * 100))%) - Speed: \(String(format: "%.2f", speedMB)) MB/s")
-                    Task { @MainActor [weak self] in
-                        self?.qwenASRState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
+                    guard let self = self else { return }
+                    Task { @MainActor in
+                        self.qwenASRState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
                     }
                 }
                 
@@ -1360,12 +1379,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let totalBytes = filesToDownload.reduce(0) { $0 + Int64($1.size ?? 0) }
                 print("[Qwen3 TTS] Found \(filesToDownload.count) files to download (Total size: \(totalBytes) bytes)")
                 
-                let aggregator = ProgressAggregator(totalBytes: totalBytes) { completed, speed in
+                let aggregator = ProgressAggregator(totalBytes: totalBytes) { [weak self] completed, speed in
                     let fraction = totalBytes > 0 ? Double(completed) / Double(totalBytes) : 0.0
                     let speedMB = speed / (1024.0 * 1024.0)
                     print("[Qwen3 TTS] Download progress update: \(completed) / \(totalBytes) bytes (\(String(format: "%.1f", fraction * 100))%) - Speed: \(String(format: "%.2f", speedMB)) MB/s")
-                    Task { @MainActor [weak self] in
-                        self?.qwenTTSState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
+                    guard let self = self else { return }
+                    Task { @MainActor in
+                        self.qwenTTSState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
                     }
                 }
                 
@@ -1476,11 +1496,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         log("Stopping playback.")
         
-        taskLock.lock()
         currentPlaybackToken?.isCancelled = true
         currentPlaybackToken = nil
         activeQwenGenerationTask?.cancel()
-        taskLock.unlock()
         
         if let fileURL = currentPlayingFileURL {
             try? FileManager.default.removeItem(at: fileURL)
@@ -1623,7 +1641,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 }
 
-final class PlaybackToken {
+final class PlaybackCancellationBox: @unchecked Sendable {
     private let lock = NSLock()
     private var _isCancelled = false
     
@@ -1641,7 +1659,7 @@ final class PlaybackToken {
     }
 }
 
-final class ProgressAggregator: @unchecked Sendable {
+nonisolated final class ProgressAggregator: @unchecked Sendable {
     private let lock = NSLock()
     private var completedBytesByFile: [String: Int64] = [:]
     private var lastReportedPercent: Double = -1.0

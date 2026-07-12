@@ -26,7 +26,7 @@ struct ContainerRuntimeAssets: Equatable {
     let userWorkspaceURL: URL
 }
 
-protocol ContainerAssetManaging {
+protocol ContainerAssetManaging: Sendable {
     func existingAssets() throws -> ContainerRuntimeAssets?
     func prepareAssets(
         updateStatus: @escaping @Sendable (String) async -> Void
@@ -37,7 +37,7 @@ protocol ContainerAssetManaging {
     ) async -> String
 }
 
-protocol ContainerRuntimeManaging {
+protocol ContainerRuntimeManaging: Sendable {
     func currentEndpoint(containerName: String) async -> ManagedRuntimeEndpoint?
     func start(
         configuration: ManagedContainerConfiguration,
@@ -235,7 +235,7 @@ final class ApplicationSupportContainerAssetManager: @unchecked Sendable, Contai
     }
 }
 
-private final class KernelDownloadDelegate: NSObject, URLSessionDownloadDelegate {
+private final class KernelDownloadDelegate: NSObject, URLSessionDownloadDelegate, Sendable {
     private let reporter: KernelDownloadProgressReporter
 
     init(reporter: KernelDownloadProgressReporter) {

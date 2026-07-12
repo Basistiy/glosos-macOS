@@ -8,7 +8,7 @@
 import Combine
 import Foundation
 
-protocol AgentTransport {
+protocol AgentTransport: Sendable {
     func connect(to endpoint: AgentEndpoint) async throws
     func disconnect()
     func send(
@@ -487,13 +487,13 @@ final class AgentConnectionController: ObservableObject {
     }
 }
 
-struct OutboundMessage: Encodable, Equatable {
+struct OutboundMessage: Encodable, Equatable, Sendable {
     let type = "message"
     let session_id: String
     let message: String
 }
 
-enum AgentConnectionError: LocalizedError {
+enum AgentConnectionError: LocalizedError, Sendable {
     case invalidHTTPResponse
     case invalidResponsePayload
     case httpFailure(statusCode: Int, message: String, fallback: String)

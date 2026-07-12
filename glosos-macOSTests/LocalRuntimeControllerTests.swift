@@ -9,6 +9,7 @@ import Foundation
 import Testing
 @testable import glosos_macOS
 
+@MainActor
 struct LocalRuntimeControllerTests {
 
     @Test
@@ -177,6 +178,7 @@ struct LocalRuntimeControllerTests {
     @MainActor
     func missingAppleContainerSupportShowsGuidance() async throws {
         let defaults = makeIsolatedDefaults()
+        defaults.set("secret", forKey: "managedGoogleAPIKey")
         let controller = LocalRuntimeController(
             userDefaults: defaults,
             assetManager: StubAssetManager(
@@ -197,6 +199,7 @@ struct LocalRuntimeControllerTests {
     @MainActor
     func refreshStatusDoesNotTreatMissingManagedCredentialsAsFailure() async throws {
         let defaults = makeIsolatedDefaults()
+        defaults.set("", forKey: "managedGoogleAPIKey")
         let controller = LocalRuntimeController(
             userDefaults: defaults,
             assetManager: StubAssetManager(),
@@ -280,7 +283,7 @@ struct LocalRuntimeControllerTests {
 
 
 
-actor StubAssetManager: ContainerAssetManaging {
+@MainActor final class StubAssetManager: ContainerAssetManaging {
     static let sampleAssets = ContainerRuntimeAssets(
         supportRootURL: URL(fileURLWithPath: "/tmp/glosos"),
         imageStoreURL: URL(fileURLWithPath: "/tmp/glosos/image-store"),
@@ -324,7 +327,7 @@ actor StubAssetManager: ContainerAssetManaging {
     }
 }
 
-actor StubRuntimeManager: ContainerRuntimeManaging {
+@MainActor final class StubRuntimeManager: ContainerRuntimeManaging {
     struct StartInvocation {
         let configuration: ManagedContainerConfiguration
         let assets: ContainerRuntimeAssets
@@ -395,7 +398,7 @@ private struct ImmediateHealthChecker: LocalRuntimeHealthChecking {
     }
 }
 
-actor SequencedHealthChecker: LocalRuntimeHealthChecking {
+@MainActor final class SequencedHealthChecker: LocalRuntimeHealthChecking {
     private var results: [Bool]
 
     init(results: [Bool]) {

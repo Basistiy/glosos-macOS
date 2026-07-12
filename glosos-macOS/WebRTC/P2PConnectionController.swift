@@ -18,7 +18,7 @@ final class P2PConnectionController: ObservableObject {
     var latestCompletedPeerMessage: ChatMessage?
     @Published var latestReceivedPeerMessage: String?
     
-    var onIncomingAudioBuffer: ((AVAudioPCMBuffer) -> Void)? {
+    var onIncomingAudioBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? {
         didSet {
             webRTCManager.onIncomingAudioBuffer = onIncomingAudioBuffer
         }
@@ -117,9 +117,11 @@ final class P2PConnectionController: ObservableObject {
         }
         
         let client = SignalingClient(apiEndpoint: apiEndpoint, token: token)
-        client.delegate = self
         self.signalingClient = client
-        client.connect()
+        Task {
+            await client.setDelegate(self)
+            await client.connect()
+        }
     }
     
     func disconnect(isUserInitiated: Bool = false) {
@@ -130,14 +132,22 @@ final class P2PConnectionController: ObservableObject {
             stopPathMonitoring()
         }
         
+        let client = signalingClient
+        signalingClient = nil
+        
         if let callerId = currentCallerSocketId {
             print("[P2PConnectionController] Sending hang-up to peer \(callerId)...")
-            signalingClient?.sendHangUp(targetSocketId: callerId)
+            Task {
+                await client?.sendHangUp(targetSocketId: callerId)
+                await client?.setDelegate(nil)
+                await client?.disconnect()
+            }
+        } else {
+            Task {
+                await client?.setDelegate(nil)
+                await client?.disconnect()
+            }
         }
-        
-        signalingClient?.delegate = nil // Clear delegate to prevent any callbacks during or after disconnect
-        signalingClient?.disconnect()
-        signalingClient = nil
         
         cleanupCall()
         statusDetail = "Disconnected"
@@ -147,7 +157,7 @@ final class P2PConnectionController: ObservableObject {
         guard pathMonitor == nil else { return }
         
         let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] path in
+        monitor.pathUpdateHandler = { @Sendable [weak self] path in
             Task { @MainActor in
                 self?.handleNetworkPathUpdate(path)
             }
@@ -212,21 +222,21 @@ final class P2PConnectionController: ObservableObject {
         latestCompletedPeerMessage = nil
     }
     
-    func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
+    func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping @Sendable () -> Void) {
         webRTCManager.playAudioBuffers(buffers, completion: completion)
-    }
-    
-    func stopAudioPlayback() {
-        webRTCManager.stopAudioPlayback()
-    }
-    
-    func playAudioFile(at url: URL, completion: @escaping () -> Void) {
-        webRTCManager.playAudioFile(at: url, completion: completion)
-    }
-    
-    func startAudioStream(format: AVAudioFormat, completion: @escaping () -> Void) {
-        webRTCManager.startAudioStream(format: format, completion: completion)
-    }
+     }
+     
+     func stopAudioPlayback() {
+         webRTCManager.stopAudioPlayback()
+     }
+     
+     func playAudioFile(at url: URL, completion: @escaping @Sendable () -> Void) {
+         webRTCManager.playAudioFile(at: url, completion: completion)
+     }
+     
+     func startAudioStream(format: AVAudioFormat, completion: @escaping @Sendable () -> Void) {
+         webRTCManager.startAudioStream(format: format, completion: completion)
+     }
     
     func submitAudioBuffer(_ buffer: AVAudioPCMBuffer) {
         webRTCManager.submitAudioBuffer(buffer)
@@ -302,7 +312,10 @@ extension P2PConnectionController: SignalingClientDelegate {
         if isConnected || currentCallerSocketId != nil {
             print("[P2PConnectionController] Already in call. Re-negotiating connection...")
             if let oldCallerId = currentCallerSocketId {
-                signalingClient?.sendHangUp(targetSocketId: oldCallerId)
+                let client = signalingClient
+                Task {
+                    await client?.sendHangUp(targetSocketId: oldCallerId)
+                }
             }
             cleanupCall()
         }
@@ -345,13 +358,16 @@ extension P2PConnectionController: SignalingClientDelegate {
                 switch result {
                 case .success(let localSdp):
                     print("[P2PConnectionController] Negotiation success. Sending SDP answer...")
-                    self.signalingClient?.sendAnswer(
-                        targetSocketId: callerSocketId,
-                        answer: [
-                            "type": "answer",
-                            "sdp": localSdp.sdp
-                        ]
-                    )
+                    let signaling = self.signalingClient
+                    Task {
+                        await signaling?.sendAnswer(
+                            targetSocketId: callerSocketId,
+                            answer: [
+                                "type": "answer",
+                                "sdp": localSdp.sdp
+                            ] as [String: any Sendable]
+                        )
+                    }
                     self.statusDetail = "Connecting to \(callerUsername)..."
                 case .failure(let error):
                     print("[P2PConnectionController] Negotiation failed: \(error.localizedDescription)")
@@ -446,14 +462,16 @@ extension P2PConnectionController: WebRTCManagerDelegate {
     public func webRTCManager(_ manager: WebRTCManager, didGenerateIceCandidate candidate: RTCIceCandidate) {
         guard let targetId = currentCallerSocketId else { return }
         
-        let candidateDict: [String: Any] = [
+        let candidateDict: [String: any Sendable] = [
             "candidate": candidate.sdp,
             "sdpMLineIndex": candidate.sdpMLineIndex,
             "sdpMid": candidate.sdpMid ?? ""
         ]
         
-        // print("[P2PConnectionController] Sending local ICE candidate to \(targetId)...")
-        signalingClient?.sendIceCandidate(targetSocketId: targetId, candidate: candidateDict)
+        let client = signalingClient
+        Task {
+            await client?.sendIceCandidate(targetSocketId: targetId, candidate: candidateDict)
+        }
     }
     
     public func webRTCManager(_ manager: WebRTCManager, didReceiveMessage message: String) {

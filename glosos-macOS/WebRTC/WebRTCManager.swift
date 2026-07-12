@@ -6,8 +6,10 @@
 //
 
 import Foundation
-import WebRTC
+@preconcurrency import WebRTC
+import AVFoundation
 
+@MainActor
 public protocol WebRTCManagerDelegate: AnyObject {
     func webRTCManager(_ manager: WebRTCManager, didChangeConnectionState state: RTCIceConnectionState)
     func webRTCManager(_ manager: WebRTCManager, didGenerateIceCandidate candidate: RTCIceCandidate)
@@ -15,6 +17,289 @@ public protocol WebRTCManagerDelegate: AnyObject {
     func webRTCManager(_ manager: WebRTCManager, didChangeDataChannelState isOpen: Bool)
 }
 
+// Thread-safe container to protect audio engine state accessed concurrently by real-time rendering threads and WebRTC setup callbacks.
+private nonisolated final class WebRTCAudioState: @unchecked Sendable {
+    private let lock = NSLock()
+    
+    private var _onIncomingAudioBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    private var _activeBuffersCount = 0
+    private var _onPlaybackFinished: (@Sendable () -> Void)?
+    
+    private var _streamBuffersCount = 0
+    private var _streamCompletion: (@Sendable () -> Void)?
+    private var _streamFinishedSending = false
+    
+    private weak var _outputMixer: AVAudioMixerNode?
+    private weak var _audioEngine: AVAudioEngine?
+    
+    private var _playerNode: AVAudioPlayerNode?
+    private var _micMixerNode: AVAudioMixerNode?
+    private var _mainMixerNode: AVAudioMixerNode?
+    private var _physicalInputNode: AVAudioNode?
+    private var _inputDestinationNode: AVAudioNode?
+    private var _inputFormat: AVAudioFormat?
+    
+    private var _isSpeakersMuted = true
+    
+    var isSpeakersMuted: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _isSpeakersMuted
+        }
+        set {
+            lock.lock()
+            _isSpeakersMuted = newValue
+            lock.unlock()
+        }
+    }
+    
+    var onIncomingAudioBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _onIncomingAudioBuffer
+        }
+        set {
+            lock.lock()
+            _onIncomingAudioBuffer = newValue
+            lock.unlock()
+        }
+    }
+    
+    var activeBuffersCount: Int {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _activeBuffersCount
+        }
+        set {
+            lock.lock()
+            _activeBuffersCount = newValue
+            lock.unlock()
+        }
+    }
+    
+    var onPlaybackFinished: (@Sendable () -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _onPlaybackFinished
+        }
+        set {
+            lock.lock()
+            _onPlaybackFinished = newValue
+            lock.unlock()
+        }
+    }
+    
+    var streamBuffersCount: Int {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _streamBuffersCount
+        }
+        set {
+            lock.lock()
+            _streamBuffersCount = newValue
+            lock.unlock()
+        }
+    }
+    
+    var streamCompletion: (@Sendable () -> Void)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _streamCompletion
+        }
+        set {
+            lock.lock()
+            _streamCompletion = newValue
+            lock.unlock()
+        }
+    }
+    
+    var streamFinishedSending: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _streamFinishedSending
+        }
+        set {
+            lock.lock()
+            _streamFinishedSending = newValue
+            lock.unlock()
+        }
+    }
+    
+    var outputMixer: AVAudioMixerNode? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _outputMixer
+        }
+        set {
+            lock.lock()
+            _outputMixer = newValue
+            lock.unlock()
+        }
+    }
+    
+    var audioEngine: AVAudioEngine? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _audioEngine
+        }
+        set {
+            lock.lock()
+            _audioEngine = newValue
+            lock.unlock()
+        }
+    }
+    
+    var playerNode: AVAudioPlayerNode? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _playerNode
+        }
+        set {
+            lock.lock()
+            _playerNode = newValue
+            lock.unlock()
+        }
+    }
+    
+    var micMixerNode: AVAudioMixerNode? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _micMixerNode
+        }
+        set {
+            lock.lock()
+            _micMixerNode = newValue
+            lock.unlock()
+        }
+    }
+    
+    var mainMixerNode: AVAudioMixerNode? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _mainMixerNode
+        }
+        set {
+            lock.lock()
+            _mainMixerNode = newValue
+            lock.unlock()
+        }
+    }
+    
+    var physicalInputNode: AVAudioNode? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _physicalInputNode
+        }
+        set {
+            lock.lock()
+            _physicalInputNode = newValue
+            lock.unlock()
+        }
+    }
+    
+    var inputDestinationNode: AVAudioNode? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _inputDestinationNode
+        }
+        set {
+            lock.lock()
+            _inputDestinationNode = newValue
+            lock.unlock()
+        }
+    }
+    
+    var inputFormat: AVAudioFormat? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _inputFormat
+        }
+        set {
+            lock.lock()
+            _inputFormat = newValue
+            lock.unlock()
+        }
+    }
+    
+    func decrementActiveBuffers() -> (Int, (@Sendable () -> Void)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        _activeBuffersCount -= 1
+        let count = _activeBuffersCount
+        let callback = _onPlaybackFinished
+        if count == 0 {
+            _onPlaybackFinished = nil
+        }
+        return (count, callback)
+    }
+    
+    func resetPlayback() {
+        lock.lock()
+        _activeBuffersCount = 0
+        _onPlaybackFinished = nil
+        lock.unlock()
+    }
+    
+    func incrementStreamBuffers() {
+        lock.lock()
+        _streamBuffersCount += 1
+        lock.unlock()
+    }
+    
+    func decrementStreamBuffers() -> (Int, (@Sendable () -> Void)?, Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        _streamBuffersCount -= 1
+        return (_streamBuffersCount, _streamCompletion, _streamFinishedSending)
+    }
+    
+    func finishStreamSending() -> (Int, (@Sendable () -> Void)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        _streamFinishedSending = true
+        return (_streamBuffersCount, _streamCompletion)
+    }
+    
+    func clearStream() {
+        lock.lock()
+        _streamBuffersCount = 0
+        _streamCompletion = nil
+        _streamFinishedSending = false
+        lock.unlock()
+    }
+    
+    func clearAudioGraph() {
+        lock.lock()
+        _playerNode = nil
+        _micMixerNode = nil
+        _mainMixerNode = nil
+        _physicalInputNode = nil
+        _inputDestinationNode = nil
+        _inputFormat = nil
+        _outputMixer = nil
+        _audioEngine = nil
+        _activeBuffersCount = 0
+        _onPlaybackFinished = nil
+        lock.unlock()
+    }
+}
+
+@MainActor
 public final class WebRTCManager: NSObject {
     public weak var delegate: WebRTCManagerDelegate?
     
@@ -23,24 +308,12 @@ public final class WebRTCManager: NSObject {
     private var dataChannel: RTCDataChannel?
     private var pendingIceCandidates: [RTCIceCandidate] = []
     
-    private var localAudioTrack: RTCAudioTrack?
-    private var playerNode: AVAudioPlayerNode?
-    private var micMixerNode: AVAudioMixerNode?
-    private var mainMixerNode: AVAudioMixerNode?
-    private var physicalInputNode: AVAudioNode?
-    private var inputDestinationNode: AVAudioNode?
-    private var inputFormat: AVAudioFormat?
+    private let audioState = WebRTCAudioState()
     
-    private var activeBuffersCount = 0
-    private let bufferLock = NSLock()
-    private var onPlaybackFinished: (() -> Void)?
-    
-    private let streamLock = NSLock()
-    private var streamBuffersCount = 0
-    private var streamCompletion: (() -> Void)?
-    private var streamFinishedSending = false
-    
-    public var onIncomingAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
+    public var onIncomingAudioBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? {
+        get { audioState.onIncomingAudioBuffer }
+        set { audioState.onIncomingAudioBuffer = newValue }
+    }
     
     public var isMicrophoneMuted: Bool = false {
         didSet {
@@ -49,21 +322,17 @@ public final class WebRTCManager: NSObject {
         }
     }
     
-    private let mixerLock = NSLock()
-    private weak var outputMixer: AVAudioMixerNode?
-    private weak var audioEngine: AVAudioEngine?
+    private var localAudioTrack: RTCAudioTrack?
     
     public var isSpeakersMuted: Bool = true {
         didSet {
+            audioState.isSpeakersMuted = isSpeakersMuted
             updateSpeakersMuteState()
         }
     }
     
     private func updateSpeakersMuteState() {
-        mixerLock.lock()
-        let mixer = outputMixer
-        mixerLock.unlock()
-        
+        let mixer = audioState.outputMixer
         let volume: Float = isSpeakersMuted ? 0.0 : 1.0
         if let mixer = mixer {
             mixer.outputVolume = volume
@@ -90,7 +359,14 @@ public final class WebRTCManager: NSObject {
     }
     
     deinit {
-        cleanup()
+        let pc = self.peerConnection
+        let dc = self.dataChannel
+        let state = self.audioState
+        DispatchQueue.main.async {
+            dc?.close()
+            pc?.close()
+            state.clearAudioGraph()
+        }
         RTCCleanupSSL()
     }
     
@@ -129,10 +405,10 @@ public final class WebRTCManager: NSObject {
         return true
     }
     
-    public func handleIncomingCall(offerSdp: String, completion: @escaping (Result<RTCSessionDescription, Error>) -> Void) {
+    public func handleIncomingCall(offerSdp: String, completion: @escaping @Sendable @MainActor (Result<RTCSessionDescription, Error>) -> Void) {
         guard let pc = peerConnection else {
             let error = NSError(domain: "WebRTCManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "PeerConnection is not initialized"])
-            DispatchQueue.main.async { completion(.failure(error)) }
+            completion(.failure(error))
             return
         }
         
@@ -142,7 +418,7 @@ public final class WebRTCManager: NSObject {
             guard let self = self else { return }
             if let error = error {
                 print("[WebRTCManager] SetRemoteDescription (Offer) failed: \(error.localizedDescription)")
-                DispatchQueue.main.async { completion(.failure(error)) }
+                completion(.failure(error))
                 return
             }
             
@@ -155,25 +431,25 @@ public final class WebRTCManager: NSObject {
                 
                 if let error = error {
                     print("[WebRTCManager] CreateAnswer failed: \(error.localizedDescription)")
-                    DispatchQueue.main.async { completion(.failure(error)) }
+                    completion(.failure(error))
                     return
                 }
                 
                 guard let localSdp = localSdp else {
                     let error = NSError(domain: "WebRTCManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "Created Answer was nil"])
-                    DispatchQueue.main.async { completion(.failure(error)) }
+                    completion(.failure(error))
                     return
                 }
                 
                 pc.setLocalDescription(localSdp) { error in
                     if let error = error {
                         print("[WebRTCManager] SetLocalDescription (Answer) failed: \(error.localizedDescription)")
-                        DispatchQueue.main.async { completion(.failure(error)) }
+                        completion(.failure(error))
                         return
                     }
                     
                     print("[WebRTCManager] SetLocalDescription (Answer) succeeded. Sending answer...")
-                    DispatchQueue.main.async { completion(.success(localSdp)) }
+                    completion(.success(localSdp))
                 }
             }
         }
@@ -238,32 +514,17 @@ public final class WebRTCManager: NSObject {
             pc.close()
             peerConnection = nil
         }
-        localAudioTrack = nil
-        pendingIceCandidates.removeAll()
-        playerNode = nil
-        micMixerNode = nil
-        mainMixerNode = nil
-        physicalInputNode = nil
-        inputDestinationNode = nil
-        inputFormat = nil
-        
-        mixerLock.lock()
-        outputMixer = nil
-        audioEngine = nil
-        mixerLock.unlock()
-        
-        bufferLock.lock()
-        activeBuffersCount = 0
-        onPlaybackFinished = nil
-        bufferLock.unlock()
+        audioState.clearAudioGraph()
     }
     
     private func monoFormat(for format: AVAudioFormat) -> AVAudioFormat {
         return AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, channels: 1, interleaved: false) ?? format
     }
     
-    public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping () -> Void) {
-        guard let player = playerNode, let mixer = mainMixerNode, let engine = player.engine, !buffers.isEmpty else {
+    public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping @Sendable () -> Void) {
+        guard let player = audioState.playerNode,
+              let mixer = audioState.mainMixerNode,
+              let engine = player.engine, !buffers.isEmpty else {
             completion()
             return
         }
@@ -275,27 +536,17 @@ public final class WebRTCManager: NSObject {
             print("[WebRTCManager] Playing audio buffers with format: \(connectionFormat) (reconnected player to mainMixerNode)")
         }
         
-        bufferLock.lock()
-        activeBuffersCount = buffers.count
-        onPlaybackFinished = completion
-        bufferLock.unlock()
+        audioState.activeBuffersCount = buffers.count
+        audioState.onPlaybackFinished = completion
         
         if !player.isPlaying {
             player.play()
         }
         
+        let state = self.audioState
         for buffer in buffers {
-            player.scheduleBuffer(buffer) { [weak self] in
-                guard let self = self else { return }
-                self.bufferLock.lock()
-                self.activeBuffersCount -= 1
-                let count = self.activeBuffersCount
-                let callback = self.onPlaybackFinished
-                if count == 0 {
-                    self.onPlaybackFinished = nil
-                }
-                self.bufferLock.unlock()
-                
+            player.scheduleBuffer(buffer) {
+                let (count, callback) = state.decrementActiveBuffers()
                 if count == 0 {
                     DispatchQueue.main.async {
                         callback?()
@@ -305,12 +556,12 @@ public final class WebRTCManager: NSObject {
         }
     }
     
-    public func playAudioFile(at url: URL, completion: @escaping () -> Void) {
-        guard let player = playerNode, 
-              let micMixer = micMixerNode,
-              let mainMixer = mainMixerNode, 
-              let dest = inputDestinationNode, 
-              let format = inputFormat, 
+    public func playAudioFile(at url: URL, completion: @escaping @Sendable () -> Void) {
+        guard let player = audioState.playerNode,
+              let micMixer = audioState.micMixerNode,
+              let mainMixer = audioState.mainMixerNode,
+              let dest = audioState.inputDestinationNode,
+              let format = audioState.inputFormat,
               let engine = player.engine else {
             print("[WebRTCManager] [Warning] playAudioFile called but playerNode, micMixerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
             completion()
@@ -322,48 +573,37 @@ public final class WebRTCManager: NSObject {
             
             print("[WebRTCManager] Playing resampled audio file with format: \(file.processingFormat)")
             
-            // Reconnect the entire input graph to ensure it is not in a disconnected state due to engine resets
             engine.disconnectNodeOutput(player)
-            if let src = physicalInputNode {
+            if let src = audioState.physicalInputNode {
                 engine.disconnectNodeOutput(src)
             }
             engine.disconnectNodeOutput(micMixer)
             engine.disconnectNodeOutput(mainMixer)
             
-            // Reconnect player to mainMixer using mono format to force downmixing of stereo files
             let connectionFormat = monoFormat(for: file.processingFormat)
             engine.connect(player, to: mainMixer, format: connectionFormat)
             player.volume = 1.0
             
-            // Reconnect physical microphone to micMixer, and micMixer to mainMixer
-            if let src = physicalInputNode {
+            if let src = audioState.physicalInputNode {
                 engine.connect(src, to: micMixer, format: format)
                 micMixer.outputVolume = 0.0
                 engine.connect(micMixer, to: mainMixer, format: format)
             }
             
-            // Connect mainMixer to WebRTC input destination
             engine.connect(mainMixer, to: dest, format: format)
             
             print("[WebRTCManager] Reconnected WebRTC input path: player (1.0 vol) & physical microphone (0.0 vol via micMixer) -> mainMixer -> destination")
             
-            bufferLock.lock()
-            activeBuffersCount = 1
-            onPlaybackFinished = completion
-            bufferLock.unlock()
+            audioState.activeBuffersCount = 1
+            audioState.onPlaybackFinished = completion
             
             if !player.isPlaying {
                 player.play()
             }
             
-            player.scheduleFile(file, at: nil) { [weak self] in
-                guard let self = self else { return }
-                self.bufferLock.lock()
-                self.activeBuffersCount = 0
-                let callback = self.onPlaybackFinished
-                self.onPlaybackFinished = nil
-                self.bufferLock.unlock()
-                
+            let state = self.audioState
+            player.scheduleFile(file, at: nil) {
+                let (_, callback) = state.decrementActiveBuffers()
                 DispatchQueue.main.async {
                     callback?()
                 }
@@ -376,59 +616,44 @@ public final class WebRTCManager: NSObject {
     
     public func stopAudioPlayback() {
         print("[WebRTCManager] Stopping audio player node.")
-        playerNode?.stop()
-        bufferLock.lock()
-        activeBuffersCount = 0
-        onPlaybackFinished = nil
-        bufferLock.unlock()
-        
-        streamLock.lock()
-        streamBuffersCount = 0
-        streamCompletion = nil
-        streamFinishedSending = false
-        streamLock.unlock()
+        audioState.playerNode?.stop()
+        audioState.resetPlayback()
+        audioState.clearStream()
     }
     
-    public func startAudioStream(format: AVAudioFormat, completion: @escaping () -> Void) {
-        guard let player = playerNode, 
-              let micMixer = micMixerNode,
-              let mainMixer = mainMixerNode, 
-              let dest = inputDestinationNode, 
-              let inputFmt = inputFormat, 
+    public func startAudioStream(format: AVAudioFormat, completion: @escaping @Sendable () -> Void) {
+        guard let player = audioState.playerNode,
+              let micMixer = audioState.micMixerNode,
+              let mainMixer = audioState.mainMixerNode,
+              let dest = audioState.inputDestinationNode,
+              let inputFmt = audioState.inputFormat,
               let engine = player.engine else {
             print("[WebRTCManager] [Warning] startAudioStream called but playerNode, micMixerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
             completion()
             return
         }
         
-        // Reconnect the entire input graph
         engine.disconnectNodeOutput(player)
-        if let src = physicalInputNode {
+        if let src = audioState.physicalInputNode {
             engine.disconnectNodeOutput(src)
         }
         engine.disconnectNodeOutput(micMixer)
         engine.disconnectNodeOutput(mainMixer)
         
-        // Reconnect player to mainMixer using mono stream format
         let connectionFormat = monoFormat(for: format)
         engine.connect(player, to: mainMixer, format: connectionFormat)
         player.volume = 1.0
         
-        // Reconnect physical microphone to micMixer, and micMixer to mainMixer
-        if let src = physicalInputNode {
+        if let src = audioState.physicalInputNode {
             engine.connect(src, to: micMixer, format: inputFmt)
             micMixer.outputVolume = 0.0
             engine.connect(micMixer, to: mainMixer, format: inputFmt)
         }
         
-        // Connect mainMixer to WebRTC input destination
         engine.connect(mainMixer, to: dest, format: inputFmt)
         
-        streamLock.lock()
-        streamBuffersCount = 0
-        streamCompletion = completion
-        streamFinishedSending = false
-        streamLock.unlock()
+        audioState.clearStream()
+        audioState.streamCompletion = completion
         
         if !player.isPlaying {
             player.play()
@@ -438,7 +663,7 @@ public final class WebRTCManager: NSObject {
     }
     
     public func submitAudioBuffer(_ buffer: AVAudioPCMBuffer) {
-        guard let player = playerNode else { return }
+        guard let player = audioState.playerNode else { return }
         
         let playerOutputFormat = player.outputFormat(forBus: 0)
         guard playerOutputFormat.channelCount == buffer.format.channelCount else {
@@ -446,23 +671,13 @@ public final class WebRTCManager: NSObject {
             return
         }
         
-        streamLock.lock()
-        streamBuffersCount += 1
-        streamLock.unlock()
+        audioState.incrementStreamBuffers()
         
-        player.scheduleBuffer(buffer) { [weak self] in
-            guard let self = self else { return }
-            self.streamLock.lock()
-            self.streamBuffersCount -= 1
-            let count = self.streamBuffersCount
-            let isFinished = self.streamFinishedSending
-            let completion = self.streamCompletion
+        let state = self.audioState
+        player.scheduleBuffer(buffer) {
+            let (count, completion, isFinished) = state.decrementStreamBuffers()
             if count == 0 && isFinished {
-                self.streamCompletion = nil
-            }
-            self.streamLock.unlock()
-            
-            if count == 0 && isFinished {
+                state.streamCompletion = nil
                 DispatchQueue.main.async {
                     completion?()
                 }
@@ -471,16 +686,9 @@ public final class WebRTCManager: NSObject {
     }
     
     public func finishAudioStream() {
-        streamLock.lock()
-        streamFinishedSending = true
-        let count = streamBuffersCount
-        let completion = streamCompletion
+        let (count, completion) = audioState.finishStreamSending()
         if count == 0 {
-            streamCompletion = nil
-        }
-        streamLock.unlock()
-        
-        if count == 0 {
+            audioState.streamCompletion = nil
             DispatchQueue.main.async {
                 completion?()
             }
@@ -492,22 +700,21 @@ public final class WebRTCManager: NSObject {
 // MARK: - RTCPeerConnectionDelegate
 
 extension WebRTCManager: RTCPeerConnectionDelegate {
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {
         print("[WebRTCManager] Signaling state changed: \(stateChanged.rawValue)")
     }
     
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        // We only use data channel, but this might fire
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
     }
     
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {
     }
     
-    public func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
+    nonisolated public func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
         print("[WebRTCManager] peerConnectionShouldNegotiate triggered.")
     }
     
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         print("[WebRTCManager] ICE connection state changed: \(newState.rawValue)")
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
@@ -515,29 +722,26 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
         }
     }
     
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
         print("[WebRTCManager] ICE gathering state changed: \(newState.rawValue)")
     }
     
-
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        // print("[WebRTCManager] Generated local ICE candidate: \(candidate.sdp)")
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.delegate?.webRTCManager(self, didGenerateIceCandidate: candidate)
         }
     }
     
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {
     }
     
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+    nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         print("[WebRTCManager] Remote peer opened data channel '\(dataChannel.label)'.")
-        self.dataChannel = dataChannel
-        dataChannel.delegate = self
-        
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.dataChannel = dataChannel
+            dataChannel.delegate = self
             self.delegate?.webRTCManager(self, didChangeDataChannelState: dataChannel.readyState == .open)
         }
     }
@@ -546,7 +750,7 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
 // MARK: - RTCDataChannelDelegate
 
 extension WebRTCManager: RTCDataChannelDelegate {
-    public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+    nonisolated public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         print("[WebRTCManager] Data channel '\(dataChannel.label)' state changed: \(dataChannel.readyState.rawValue)")
         let isOpen = (dataChannel.readyState == .open)
         DispatchQueue.main.async { [weak self] in
@@ -555,7 +759,7 @@ extension WebRTCManager: RTCDataChannelDelegate {
         }
     }
     
-    public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+    nonisolated public func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         guard !buffer.isBinary else {
             print("[WebRTCManager] Received binary message on data channel. Ignoring.")
             return
@@ -576,44 +780,43 @@ extension WebRTCManager: RTCDataChannelDelegate {
 // MARK: - RTCAudioDeviceModuleDelegate
 
 extension WebRTCManager: RTCAudioDeviceModuleDelegate {
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didReceiveSpeechActivityEvent speechActivityEvent: RTCSpeechActivityEvent) {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didReceiveSpeechActivityEvent speechActivityEvent: RTCSpeechActivityEvent) {
         print("[WebRTCManager] audioDeviceModule didReceiveSpeechActivityEvent: \(speechActivityEvent.rawValue)")
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didCreateEngine engine: AVAudioEngine) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didCreateEngine engine: AVAudioEngine) -> Int {
         print("[WebRTCManager] audioDeviceModule didCreateEngine called.")
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willEnableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willEnableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule willEnableEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willStartEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willStartEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule willStartEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didStopEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didStopEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule didStopEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didDisableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didDisableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule didDisableEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willReleaseEngine engine: AVAudioEngine) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willReleaseEngine engine: AVAudioEngine) -> Int {
         print("[WebRTCManager] audioDeviceModule willReleaseEngine called.")
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureInputFromSource source: AVAudioNode?, toDestination destination: AVAudioNode, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureInputFromSource source: AVAudioNode?, toDestination destination: AVAudioNode, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
         print("[WebRTCManager] configureInputFromSource called. Format: \(format)")
         
-        // Break any default connections WebRTC might have made for input
         if let src = source {
             engine.disconnectNodeOutput(src)
         }
@@ -627,11 +830,9 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
         engine.attach(micMixer)
         engine.attach(mainMixer)
         
-        // Connect player to mainMixer
         engine.connect(player, to: mainMixer, format: format)
         player.volume = 1.0
         
-        // Connect physical microphone to micMixer, and micMixer to mainMixer
         if let src = source {
             engine.connect(src, to: micMixer, format: format)
             micMixer.outputVolume = 0.0
@@ -639,23 +840,21 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
             engine.connect(micMixer, to: mainMixer, format: format)
         }
         
-        // Connect mainMixer to WebRTC's input destination
         engine.connect(mainMixer, to: destination, format: format)
         
-        self.playerNode = player
-        self.micMixerNode = micMixer
-        self.mainMixerNode = mainMixer
-        self.physicalInputNode = source
-        self.inputDestinationNode = destination
-        self.inputFormat = format
+        audioState.playerNode = player
+        audioState.micMixerNode = micMixer
+        audioState.mainMixerNode = mainMixer
+        audioState.physicalInputNode = source
+        audioState.inputDestinationNode = destination
+        audioState.inputFormat = format
         
         return 0
     }
     
-    public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureOutputFromSource source: AVAudioNode, toDestination destination: AVAudioNode?, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
+    nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, engine: AVAudioEngine, configureOutputFromSource source: AVAudioNode, toDestination destination: AVAudioNode?, format: AVAudioFormat, context: [AnyHashable : Any]) -> Int {
         print("[WebRTCManager] configureOutputFromSource called. Format: \(format)")
         
-        // Break any default connections WebRTC/engine might have made
         engine.disconnectNodeOutput(source)
         if let dest = destination {
             engine.disconnectNodeInput(dest)
@@ -664,37 +863,35 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
         let localOutputMixer = AVAudioMixerNode()
         engine.attach(localOutputMixer)
         
-        // Connect source -> localOutputMixer -> destination (or mainMixerNode if destination is nil)
         engine.connect(source, to: localOutputMixer, format: format)
         
         let finalDest = destination ?? engine.mainMixerNode
         engine.connect(localOutputMixer, to: finalDest, format: format)
         
-        mixerLock.lock()
-        self.outputMixer = localOutputMixer
-        self.audioEngine = engine
-        localOutputMixer.outputVolume = isSpeakersMuted ? 0.0 : 1.0
-        mixerLock.unlock()
+        localOutputMixer.outputVolume = audioState.isSpeakersMuted ? 0.0 : 1.0
+        
+        audioState.outputMixer = localOutputMixer
+        audioState.audioEngine = engine
         
         print("[WebRTCManager] Configured custom output mixer node with volume: \(localOutputMixer.outputVolume)")
         
-        // Keep mainMixerNode outputVolume at 1.0 to ensure voice processing / downlink DSP works
         engine.mainMixerNode.outputVolume = 1.0
         
         source.removeTap(onBus: 0)
-        source.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] (buffer, time) in
-            guard let self = self else { return }
-            self.onIncomingAudioBuffer?(buffer)
+        source.installTap(onBus: 0, bufferSize: 1024, format: format) { (buffer, time) in
+            if let onIncoming = self.audioState.onIncomingAudioBuffer {
+                onIncoming(buffer)
+            }
         }
         
         return 0
     }
     
-    public func audioDeviceModuleDidUpdateDevices(_ audioDeviceModule: RTCAudioDeviceModule) {
+    nonisolated public func audioDeviceModuleDidUpdateDevices(_ audioDeviceModule: RTCAudioDeviceModule) {
         print("[WebRTCManager] audioDeviceModuleDidUpdateDevices called.")
     }
     
-    public func audioDeviceModule(_ module: RTCAudioDeviceModule, didUpdateAudioProcessingState state: RTCAudioProcessingState) {
+    nonisolated public func audioDeviceModule(_ module: RTCAudioDeviceModule, didUpdateAudioProcessingState state: RTCAudioProcessingState) {
         print("[WebRTCManager] audioDeviceModule didUpdateAudioProcessingState: voiceProcessingEnabled=\(state.voiceProcessingEnabled)")
     }
 }

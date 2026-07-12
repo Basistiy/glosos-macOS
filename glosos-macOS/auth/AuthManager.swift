@@ -13,7 +13,7 @@ import AuthenticationServices
 
 
 /// A helper class to securely store the JWT token in the macOS Keychain.
-public struct KeychainHelper {
+public struct KeychainHelper: Sendable {
     static let service = "com.glosos.auth-token"
 
     @discardableResult
@@ -79,7 +79,7 @@ public final class AuthManager: ObservableObject {
     private static let currentUserInfoKey = "currentUserInfo"
     private static let tokenAccountKey = "current_user_token"
 
-    private var tokenExpiredObserver: Any?
+    nonisolated(unsafe) private var tokenExpiredObserver: Any?
     private let presentationContextProvider = PresentationContextProvider()
 
     public init(userDefaults: UserDefaults = .standard, urlSession: URLSession = .shared) {
@@ -97,10 +97,12 @@ public final class AuthManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self else { return }
             print("[AuthManager] Auth token expired or invalid. Logging out...")
-            self.logout()
-            self.error = "Session expired. Please log in again."
+            guard let self = self else { return }
+            Task { @MainActor in
+                self.logout()
+                self.error = "Session expired. Please log in again."
+            }
         }
     }
 

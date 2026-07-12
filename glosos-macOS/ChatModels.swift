@@ -7,11 +7,11 @@
 
 import Foundation
 
-enum AgentTransportKind: String, Equatable {
+enum AgentTransportKind: String, Equatable, Sendable {
     case httpStream = "http-stream"
 }
 
-struct ManagedRuntimeEndpoint: Equatable {
+struct ManagedRuntimeEndpoint: Equatable, Sendable {
     let transport: AgentTransportKind
     let scheme: String
     let host: String
@@ -40,11 +40,11 @@ struct ManagedRuntimeEndpoint: Equatable {
         }
     }
 
-    nonisolated var displayString: String {
+    var displayString: String {
         baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
-    nonisolated var baseURL: URL {
+    var baseURL: URL {
         var components = URLComponents()
         components.scheme = scheme
         components.host = host
@@ -53,12 +53,12 @@ struct ManagedRuntimeEndpoint: Equatable {
         return components.url!
     }
 
-    nonisolated var agentEndpoint: AgentEndpoint {
+    var agentEndpoint: AgentEndpoint {
         AgentEndpoint(baseURL: baseURL)
     }
 }
 
-struct AgentEndpoint: Equatable {
+struct AgentEndpoint: Equatable, Sendable {
     static let defaultLocalBaseURLString = "http://127.0.0.1:18000"
 
     let baseURL: URL
@@ -126,14 +126,14 @@ struct AgentEndpoint: Equatable {
     }
 }
 
-struct ChatMessage: Identifiable, Equatable {
-    enum Role: String {
+struct ChatMessage: Identifiable, Equatable, Sendable {
+    enum Role: String, Sendable {
         case user
         case assistant
         case system
     }
 
-    enum State: String {
+    enum State: String, Sendable {
         case draft
         case streaming
         case final
@@ -165,7 +165,7 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
-struct UserAudioClip: Identifiable, Equatable {
+struct UserAudioClip: Identifiable, Equatable, Sendable {
     let id: UUID
     let fileURL: URL
     let duration: TimeInterval
@@ -177,7 +177,7 @@ struct UserAudioClip: Identifiable, Equatable {
     }
 }
 
-struct TranscribedUtterance: Identifiable, Equatable {
+struct TranscribedUtterance: Identifiable, Equatable, Sendable {
     let id: UUID
     let text: String
     let audioClip: UserAudioClip?
@@ -189,7 +189,7 @@ struct TranscribedUtterance: Identifiable, Equatable {
     }
 }
 
-struct PendingUtteranceCoordinator: Equatable {
+struct PendingUtteranceCoordinator: Equatable, Sendable {
     private(set) var pendingUtterance: TranscribedUtterance?
 
     mutating func register(_ utterance: TranscribedUtterance, whileAwaitingAssistantResponse isAwaitingAssistantResponse: Bool) -> TranscribedUtterance? {
@@ -215,7 +215,7 @@ struct PendingUtteranceCoordinator: Equatable {
     }
 }
 
-struct AssistantPlaybackCoordinator: Equatable {
+struct AssistantPlaybackCoordinator: Equatable, Sendable {
     private(set) var suppressedAssistantMessageID: UUID?
 
     mutating func suppress(messageID: UUID?) {
@@ -240,7 +240,7 @@ struct AssistantPlaybackCoordinator: Equatable {
     }
 }
 
-struct AgentEvent: Decodable, Equatable {
+struct AgentEvent: Decodable, Equatable, Sendable {
     let type: String
     let session_id: String?
     let text: String?

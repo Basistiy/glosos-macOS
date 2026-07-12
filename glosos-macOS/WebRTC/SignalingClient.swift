@@ -7,7 +7,8 @@
 
 import Foundation
 
-public protocol SignalingClientDelegate: AnyObject {
+@MainActor
+public protocol SignalingClientDelegate: AnyObject, Sendable {
     func signalingClientDidConnect(_ client: SignalingClient)
     func signalingClientDidDisconnect(_ client: SignalingClient)
     func signalingClient(_ client: SignalingClient, didReceiveIncomingCall callerSocketId: String, callerUsername: String, offer: [String: Any])
@@ -22,131 +23,154 @@ public extension SignalingClientDelegate {
     func signalingClientDidGiveUpReconnect(_ client: SignalingClient) {}
 }
 
-public final class SignalingClient: NSObject {
+public actor SignalingClient {
     public weak var delegate: SignalingClientDelegate?
     
     private let apiEndpoint: String
     private let token: String
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession?
+    private var sessionDelegate: URLSessionWebSocketDelegate?
     private var isConnected = false
-    private let queue = DispatchQueue(label: "com.glosos.signaling-client", qos: .userInitiated)
     
     private var isExplicitDisconnect = false
     private var reconnectAttempts = 0
     private let maxReconnectAttempts = 5
-    private var reconnectWorkItem: DispatchWorkItem?
+    private var reconnectTask: Task<Void, Never>?
     
-    private var heartbeatTimer: Timer?
+    private var lastHeartbeatTime = Date()
+    private var heartbeatTask: Task<Void, Never>?
     private var pingInterval: TimeInterval = 25.0
     private var pingTimeout: TimeInterval = 20.0
     
     public init(apiEndpoint: String, token: String) {
         self.apiEndpoint = apiEndpoint
         self.token = token
-        super.init()
+    }
+    
+    public func setDelegate(_ delegate: SignalingClientDelegate?) {
+        self.delegate = delegate
     }
     
     public func connect() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            guard !self.isConnected else { return }
-            
-            self.reconnectWorkItem?.cancel()
-            self.reconnectWorkItem = nil
-            self.isExplicitDisconnect = false
-            
-            guard let webSocketURL = Self.makeWebSocketURL(from: self.apiEndpoint) else {
-                let error = NSError(domain: "SignalingClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid apiEndpoint for WebSocket URL formulation"])
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.delegate?.signalingClient(self, didFailWithError: error)
-                }
-                return
+        guard !isConnected else { return }
+        
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        isExplicitDisconnect = false
+        
+        guard let webSocketURL = Self.makeWebSocketURL(from: apiEndpoint) else {
+            let error = NSError(domain: "SignalingClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid apiEndpoint for WebSocket URL formulation"])
+            let currentDelegate = delegate
+            Task { @MainActor in
+                await currentDelegate?.signalingClient(self, didFailWithError: error)
             }
-            
-            print("[SignalingClient] Connecting to \(webSocketURL.absoluteString)...")
-            
-            let configuration = URLSessionConfiguration.default
-            // Set reasonable timeout (increased to 60s to prevent premature timeout during 25s ping intervals)
-            configuration.timeoutIntervalForRequest = 60
-            configuration.timeoutIntervalForResource = 300
-            
-            let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-            self.urlSession = session
-            
-            // Clean up any stale webSocketTask
-            self.webSocketTask?.cancel()
-            
-            let task = session.webSocketTask(with: webSocketURL)
-            self.webSocketTask = task
-            task.resume()
-            
-            self.listen()
+            return
         }
+        
+        print("[SignalingClient] Connecting to \(webSocketURL.absoluteString)...")
+        
+        let configuration = URLSessionConfiguration.default
+        // Set reasonable timeout
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 300
+        
+        let delegateHelper = SignalingSessionDelegate(
+            onOpen: {
+                print("[SignalingClient] WebSocket connection opened successfully.")
+            },
+            onClose: { [weak self] in
+                print("[SignalingClient] WebSocket connection closed.")
+                guard let self = self else { return }
+                Task {
+                    await self.handleDisconnect()
+                }
+            },
+            didComplete: { [weak self] error in
+                guard let self = self else { return }
+                if let error = error {
+                    print("[SignalingClient] WebSocket task completed with error: \(error.localizedDescription)")
+                    Task {
+                        await self.handleFailure(error)
+                    }
+                } else {
+                    print("[SignalingClient] WebSocket task completed.")
+                    Task {
+                        await self.handleDisconnect()
+                    }
+                }
+            }
+        )
+        self.sessionDelegate = delegateHelper
+        
+        let session = URLSession(configuration: configuration, delegate: delegateHelper, delegateQueue: nil)
+        self.urlSession = session
+        
+        // Clean up any stale webSocketTask
+        webSocketTask?.cancel()
+        
+        let task = session.webSocketTask(with: webSocketURL)
+        self.webSocketTask = task
+        task.resume()
+        
+        listen()
     }
     
     public func disconnect() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            
-            print("[SignalingClient] Disconnecting...")
-            self.isExplicitDisconnect = true
-            self.reconnectWorkItem?.cancel()
-            self.reconnectWorkItem = nil
-            self.reconnectAttempts = 0
-            
-            // Invalidate heartbeat timer
-            DispatchQueue.main.async { [weak self] in
-                self?.heartbeatTimer?.invalidate()
-                self?.heartbeatTimer = nil
-            }
-            
-            guard self.isConnected || self.webSocketTask != nil else { return }
-            
-            // Send Socket.IO namespace disconnect frame (41)
-            self.sendRaw("41")
-            
-            self.webSocketTask?.cancel(with: .normalClosure, reason: nil)
-            self.webSocketTask = nil
-            self.urlSession?.invalidateAndCancel()
-            self.urlSession = nil
-            self.isConnected = false
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.delegate?.signalingClientDidDisconnect(self)
-            }
+        print("[SignalingClient] Disconnecting...")
+        isExplicitDisconnect = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        reconnectAttempts = 0
+        
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        
+        guard isConnected || webSocketTask != nil else { return }
+        
+        // Send Socket.IO namespace disconnect frame (41)
+        sendRaw("41")
+        
+        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+        webSocketTask = nil
+        urlSession?.invalidateAndCancel()
+        urlSession = nil
+        isConnected = false
+        
+        let currentDelegate = delegate
+        Task { @MainActor in
+            await currentDelegate?.signalingClientDidDisconnect(self)
         }
     }
     
-    public func sendAnswer(targetSocketId: String, answer: [String: Any]) {
-        let payload: [Any] = [
+    public func sendAnswer(targetSocketId: String, answer: [String: any Sendable]) {
+        let payload: [any Sendable] = [
             "make-answer",
             [
                 "targetSocketId": targetSocketId,
                 "answer": answer
-            ]
+            ] as [String: any Sendable]
         ]
         sendSocketIOEvent(payload)
     }
     
-    public func sendIceCandidate(targetSocketId: String, candidate: [String: Any]) {
-        let payload: [Any] = [
+    public func sendIceCandidate(targetSocketId: String, candidate: [String: any Sendable]) {
+        let payload: [any Sendable] = [
             "ice-candidate",
             [
                 "targetSocketId": targetSocketId,
                 "candidate": candidate
-            ]
+            ] as [String: any Sendable]
         ]
         sendSocketIOEvent(payload)
     }
     
     public func sendHangUp(targetSocketId: String) {
-        let payload: [Any] = [
+        let payload: [any Sendable] = [
             "hang-up",
             [
                 "targetSocketId": targetSocketId
-            ]
+            ] as [String: any Sendable]
         ]
         sendSocketIOEvent(payload)
     }
@@ -156,39 +180,29 @@ public final class SignalingClient: NSObject {
     private func listen() {
         webSocketTask?.receive { [weak self] result in
             guard let self = self else { return }
-            self.queue.async {
+            Task {
                 switch result {
                 case .success(let message):
                     switch message {
                     case .string(let text):
-                        self.handleMessage(text)
+                        await self.handleMessage(text)
                     case .data(let data):
                         if let text = String(data: data, encoding: .utf8) {
-                            self.handleMessage(text)
+                            await self.handleMessage(text)
                         }
                     @unknown default:
                         break
                     }
-                    self.listen()
+                    await self.listen()
                 case .failure(let error):
                     print("[SignalingClient] WebSocket read error: \(error.localizedDescription)")
-                    self.handleFailure(error)
+                    await self.handleFailure(error)
                 }
             }
         }
     }
     
     private func handleMessage(_ text: String) {
-        // Engine.IO protocol prefixes messages with digits representing packet type:
-        // 0: open (connection handshake with JSON payload)
-        // 1: close
-        // 2: ping
-        // 3: pong
-        // 4: message
-        // 40: socket.io namespace connect
-        // 41: socket.io namespace disconnect
-        // 42: socket.io namespace event (JSON array payload [eventName, data])
-        
         guard let firstChar = text.first else { return }
         
         // Reset heartbeat timer on any incoming message
@@ -229,11 +243,11 @@ public final class SignalingClient: NSObject {
             self.isConnected = true
             self.reconnectAttempts = 0
             self.isExplicitDisconnect = false
-            self.reconnectWorkItem?.cancel()
-            self.reconnectWorkItem = nil
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.delegate?.signalingClientDidConnect(self)
+            self.reconnectTask?.cancel()
+            self.reconnectTask = nil
+            let currentDelegate = delegate
+            Task { @MainActor in
+                await currentDelegate?.signalingClientDidConnect(self)
             }
         } else if firstChar == "2" {
             // Ping from server: reply with Pong (3) immediately to maintain connection
@@ -273,17 +287,16 @@ public final class SignalingClient: NSObject {
     }
     
     private func parseSocketIOEvent(_ jsonString: String) {
-        guard let data = jsonString.data(using: .utf8),
-              let jsonArray = try? JSONSerialization.jsonObject(with: data, options: []) as? [Any],
-              jsonArray.count >= 2,
-              let eventName = jsonArray[0] as? String else {
-            return
-        }
-        
-        let eventData = jsonArray[1]
-        
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        let currentDelegate = delegate
+        Task { @MainActor in
+            guard let data = jsonString.data(using: .utf8),
+                  let jsonArray = try? JSONSerialization.jsonObject(with: data, options: []) as? [Any],
+                  jsonArray.count >= 2,
+                  let eventName = jsonArray[0] as? String else {
+                return
+            }
+            
+            let eventData = jsonArray[1]
             
             switch eventName {
             case "incoming-call":
@@ -294,7 +307,7 @@ public final class SignalingClient: NSObject {
                     return
                 }
                 print("[SignalingClient] Incoming call from \(callerUsername) (\(callerSocketId))")
-                self.delegate?.signalingClient(self, didReceiveIncomingCall: callerSocketId, callerUsername: callerUsername, offer: offer)
+                await currentDelegate?.signalingClient(self, didReceiveIncomingCall: callerSocketId, callerUsername: callerUsername, offer: offer)
                 
             case "ice-candidate":
                 guard let payload = eventData as? [String: Any],
@@ -302,7 +315,7 @@ public final class SignalingClient: NSObject {
                       let candidate = payload["candidate"] as? [String: Any] else {
                     return
                 }
-                self.delegate?.signalingClient(self, didReceiveIceCandidate: senderSocketId, candidate: candidate)
+                await currentDelegate?.signalingClient(self, didReceiveIceCandidate: senderSocketId, candidate: candidate)
                 
             case "hang-up":
                 guard let payload = eventData as? [String: Any],
@@ -310,7 +323,7 @@ public final class SignalingClient: NSObject {
                     return
                 }
                 print("[SignalingClient] Call hung up by peer \(senderSocketId)")
-                self.delegate?.signalingClient(self, didReceiveHangUp: senderSocketId)
+                await currentDelegate?.signalingClient(self, didReceiveHangUp: senderSocketId)
                 
             default:
                 break
@@ -327,91 +340,88 @@ public final class SignalingClient: NSObject {
         }
     }
     
-    private func sendSocketIOEvent(_ payload: [Any]) {
+    private func sendSocketIOEvent(_ payload: [any Sendable]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
               let jsonString = String(data: data, encoding: .utf8) else {
             return
         }
-        queue.async { [weak self] in
-            self?.sendRaw("42\(jsonString)")
-        }
+        sendRaw("42\(jsonString)")
     }
     
     private func handleFailure(_ error: Error) {
         self.handleDisconnect()
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.delegate?.signalingClient(self, didFailWithError: error)
+        let currentDelegate = delegate
+        Task { @MainActor in
+            await currentDelegate?.signalingClient(self, didFailWithError: error)
         }
     }
     
     private func handleDisconnect() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        
+        guard isConnected || webSocketTask != nil else { return }
+        webSocketTask = nil
+        urlSession = nil
+        isConnected = false
+        
+        let currentDelegate = delegate
+        Task { @MainActor in
+            await currentDelegate?.signalingClientDidDisconnect(self)
+        }
+        
+        // Schedule reconnect if this was an implicit disconnect
+        if !isExplicitDisconnect {
+            reconnectAttempts += 1
+            let delay = min(30.0, pow(2.0, Double(min(5, reconnectAttempts))))
             
-            // Invalidate heartbeat timer
-            DispatchQueue.main.async { [weak self] in
-                self?.heartbeatTimer?.invalidate()
-                self?.heartbeatTimer = nil
+            if reconnectAttempts <= maxReconnectAttempts {
+                print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) in \(delay) seconds...")
+            } else {
+                print("[SignalingClient] Connection lost. Scheduling background reconnect attempt \(reconnectAttempts) in \(delay) seconds...")
             }
             
-            guard self.isConnected || self.webSocketTask != nil else { return }
-            self.webSocketTask = nil
-            self.urlSession = nil
-            self.isConnected = false
-            
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.delegate?.signalingClientDidDisconnect(self)
+            reconnectTask?.cancel()
+            reconnectTask = Task {
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    return
+                }
+                await self.connect()
             }
             
-            // Schedule reconnect if this was an implicit disconnect
-            if !self.isExplicitDisconnect {
-                self.reconnectAttempts += 1
-                let delay = min(30.0, pow(2.0, Double(min(5, self.reconnectAttempts))))
+            let currentDelegate = delegate
+            let attempts = reconnectAttempts
+            Task { @MainActor in
+                await currentDelegate?.signalingClient(self, willAttemptReconnect: attempts, delay: delay)
                 
-                if self.reconnectAttempts <= self.maxReconnectAttempts {
-                    print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(self.reconnectAttempts)/\(self.maxReconnectAttempts) in \(delay) seconds...")
-                } else {
-                    print("[SignalingClient] Connection lost. Scheduling background reconnect attempt \(self.reconnectAttempts) in \(delay) seconds...")
-                }
-                
-                self.reconnectWorkItem?.cancel()
-                let workItem = DispatchWorkItem { [weak self] in
-                    guard let self = self else { return }
-                    print("[SignalingClient] Attempting reconnect (attempt \(self.reconnectAttempts))...")
-                    self.connect()
-                }
-                self.reconnectWorkItem = workItem
-                self.queue.asyncAfter(deadline: .now() + delay, execute: workItem)
-                
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.delegate?.signalingClient(self, willAttemptReconnect: self.reconnectAttempts, delay: delay)
-                    
-                    if self.reconnectAttempts == self.maxReconnectAttempts {
-                        print("[SignalingClient] Max rapid reconnect attempts reached (\(self.maxReconnectAttempts)). Transitioning to background retries.")
-                        self.delegate?.signalingClientDidGiveUpReconnect(self)
-                    }
+                if attempts == maxReconnectAttempts {
+                    print("[SignalingClient] Max rapid reconnect attempts reached (\(maxReconnectAttempts)). Transitioning to background retries.")
+                    await currentDelegate?.signalingClientDidGiveUpReconnect(self)
                 }
             }
         }
     }
     
     private func resetHeartbeatTimer() {
-        self.queue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // Schedule/reset the timer on the main queue
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.heartbeatTimer?.invalidate()
+        lastHeartbeatTime = Date()
+        guard heartbeatTask == nil else { return }
+        
+        heartbeatTask = Task {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(2))
+                } catch {
+                    break
+                }
                 
-                let timeoutDuration = self.pingInterval + self.pingTimeout
-                self.heartbeatTimer = Timer.scheduledTimer(withTimeInterval: timeoutDuration, repeats: false) { [weak self] _ in
-                    self?.queue.async {
-                        self?.handleHeartbeatTimeout()
-                    }
+                guard !Task.isCancelled else { break }
+                
+                let elapsed = Date().timeIntervalSince(self.lastHeartbeatTime)
+                if elapsed >= (self.pingInterval + self.pingTimeout) {
+                    self.handleHeartbeatTimeout()
+                    break
                 }
             }
         }
@@ -430,17 +440,12 @@ public final class SignalingClient: NSObject {
     // MARK: - Static URL formulation helper
     
     public static func makeWebSocketURL(from apiEndpoint: String) -> URL? {
-        // e.g. "https://glosos.com/api" -> "wss://glosos.com/socket.io/?EIO=4&transport=websocket"
-        // e.g. "http://127.0.0.1:5000/api" -> "ws://127.0.0.1:5000/socket.io/?EIO=4&transport=websocket"
-        
         var normalized = apiEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        // Remove trailing slash if present
         if normalized.hasSuffix("/") {
             normalized.removeLast()
         }
         
-        // Strip trailing "/api" if it exists, since socket.io matches on root endpoint or custom path
         if normalized.hasSuffix("/api") {
             normalized = String(normalized.dropLast(4))
         }
@@ -452,7 +457,6 @@ public final class SignalingClient: NSObject {
         } else if components.scheme == "http" {
             components.scheme = "ws"
         } else if components.scheme == nil {
-            // Default to secure WebSocket if scheme is omitted
             components.scheme = "wss"
         }
         
@@ -466,25 +470,32 @@ public final class SignalingClient: NSObject {
     }
 }
 
-// MARK: - URLSessionWebSocketDelegate
+// MARK: - Session Delegate Helper
 
-extension SignalingClient: URLSessionWebSocketDelegate {
-    public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        print("[SignalingClient] WebSocket connection opened successfully.")
+private final class SignalingSessionDelegate: NSObject, URLSessionWebSocketDelegate, Sendable {
+    private let onOpen: @Sendable () -> Void
+    private let onClose: @Sendable () -> Void
+    private let didComplete: @Sendable (Error?) -> Void
+    
+    init(
+        onOpen: @escaping @Sendable () -> Void,
+        onClose: @escaping @Sendable () -> Void,
+        didComplete: @escaping @Sendable (Error?) -> Void
+    ) {
+        self.onOpen = onOpen
+        self.onClose = onClose
+        self.didComplete = didComplete
     }
     
-    public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        print("[SignalingClient] WebSocket connection closed.")
-        self.handleDisconnect()
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        onOpen()
     }
     
-    public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error {
-            print("[SignalingClient] WebSocket task completed with error: \(error.localizedDescription)")
-            self.handleFailure(error)
-        } else {
-            print("[SignalingClient] WebSocket task completed.")
-            self.handleDisconnect()
-        }
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        onClose()
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        didComplete(error)
     }
 }

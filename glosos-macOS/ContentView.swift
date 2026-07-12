@@ -10,6 +10,7 @@ import SwiftUI
 import AVFoundation
 
 struct ContentView: View {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @ObservedObject var authManager: AuthManager
     @StateObject private var speechController = SpeechController()
     @StateObject private var agentController = AgentConnectionController()
@@ -248,13 +249,8 @@ struct ContentView: View {
                     p2pController.disconnect(isUserInitiated: true)
                     speechController.stopContinuousListening()
                 }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    let semaphore = DispatchSemaphore(value: 0)
-                    Task {
-                        await stopManagedRuntime()
-                        semaphore.signal()
-                    }
-                    _ = semaphore.wait(timeout: .now() + 5.0)
+                .onAppear {
+                    setupAppDelegateOnTerminate()
                 }
             }
         }
@@ -401,10 +397,18 @@ struct ContentView: View {
         // Setup WebRTC audio callbacks
         speechController.agentResponsesDirectoryURL = runtimeController.managedUserFolderURL
         speechController.onSynthesizedFile = { [weak p2pController] fileURL, completion in
-            p2pController?.playAudioFile(at: fileURL, completion: completion)
+            p2pController?.playAudioFile(at: fileURL, completion: {
+                Task { @MainActor in
+                    completion()
+                }
+            })
         }
         speechController.onStartAudioStream = { [weak p2pController] format, completion in
-            p2pController?.startAudioStream(format: format, completion: completion)
+            p2pController?.startAudioStream(format: format, completion: {
+                Task { @MainActor in
+                    completion()
+                }
+            })
         }
         speechController.onSubmitAudioBuffer = { [weak p2pController] buffer in
             p2pController?.submitAudioBuffer(buffer)
@@ -494,6 +498,14 @@ struct ContentView: View {
     private func stopManagedRuntime() async {
         agentController.disconnect()
         await runtimeController.stopRuntime()
+    }
+
+    private func setupAppDelegateOnTerminate() {
+        appDelegate.onTerminate = { [weak runtimeController, weak agentController] in
+            guard let runtimeController = runtimeController, let agentController = agentController else { return }
+            agentController.disconnect()
+            await runtimeController.stopRuntime()
+        }
     }
 
     private func restartManagedRuntime() async {
@@ -1579,4 +1591,18 @@ private struct SettingsView: View {
 
 #Preview {
     ContentView(authManager: AuthManager())
+}
+
+@MainActor
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var onTerminate: (() async -> Void)?
+    
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let onTerminate = onTerminate else { return .terminateNow }
+        Task {
+            await onTerminate()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 }

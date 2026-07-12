@@ -8,6 +8,7 @@
 import Testing
 @testable import glosos_macOS
 
+@MainActor
 struct SpeechLanguageTests {
 
     @Test
