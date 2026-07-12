@@ -198,7 +198,7 @@ final class AgentConnectionController: ObservableObject {
 
     @discardableResult
     func sendUserMessage(_ utterance: TranscribedUtterance) -> Bool {
-        guard isConnected else {
+        guard isConnected || (!userInitiatedDisconnect && AgentEndpoint(rawValue: endpointURL) != nil) else {
             connectionStatus = "Disconnected"
             appendSystemMessage("The app is not connected to the local agent.", state: .error)
             return false
@@ -232,7 +232,15 @@ final class AgentConnectionController: ObservableObject {
         let payload = OutboundMessage(session_id: trimmedSessionID, message: trimmedMessage)
         activeRequestTask = Task { [weak self] in
             do {
-                try await self?.transport.send(
+                guard let self else { return }
+
+                if !self.isConnected {
+                    self.connectionStatus = "Auto-reconnecting..."
+                    try await self.transport.connect(to: endpoint)
+                    self.isConnected = true
+                }
+
+                try await self.transport.send(
                     payload,
                     to: endpoint,
                     onEvent: { [weak self] event in

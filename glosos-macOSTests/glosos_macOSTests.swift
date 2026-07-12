@@ -202,6 +202,36 @@ struct glosos_macOSTests {
     }
 
     @Test
+    @MainActor
+    func agentControllerAutoReconnectsOnMessageSendIfDisconnected() async throws {
+        let transport = RecordingAgentTransport()
+        let suiteName = "AgentConnectionControllerTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        
+        let controller = AgentConnectionController(
+            userDefaults: defaults,
+            transport: transport
+        )
+        
+        // Initial state is disconnected
+        #expect(!controller.isConnected)
+        
+        // Set endpointURL
+        controller.endpointURL = "http://127.0.0.1:18000"
+        
+        // Try to send a message
+        let sent = controller.sendUserMessage("Auto reconnect message")
+        #expect(sent)
+        
+        // Allow the task to execute
+        try await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+        
+        #expect(controller.isConnected)
+        #expect(transport.connectedEndpoints == [AgentEndpoint(baseURL: URL(string: "http://127.0.0.1:18000")!)])
+    }
+
+    @Test
     func pendingUtteranceCanBeCleared() async throws {
         var coordinator = PendingUtteranceCoordinator()
         let utterance = TranscribedUtterance(text: "Stale")
