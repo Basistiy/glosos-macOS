@@ -9,7 +9,9 @@ import Foundation
 @preconcurrency import WebRTC
 import AVFoundation
 
+// SAFETY: RTCSessionDescription is immutable after construction (read-only `type` and `sdp` properties).
 extension RTCSessionDescription: @unchecked Sendable {}
+// SAFETY: RTCIceCandidate is immutable after construction (read-only `sdp`, `sdpMLineIndex`, `sdpMid` properties).
 extension RTCIceCandidate: @unchecked Sendable {}
 
 @MainActor
@@ -258,6 +260,13 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         lock.unlock()
     }
     
+    func setupPlayback(count: Int, completion: @escaping @Sendable () -> Void) {
+        lock.lock()
+        _activeBuffersCount = count
+        _onPlaybackFinished = completion
+        lock.unlock()
+    }
+    
     func incrementStreamBuffers() {
         lock.lock()
         _streamBuffersCount += 1
@@ -365,6 +374,9 @@ public final class WebRTCManager: NSObject {
         let pc = self.peerConnection
         let dc = self.dataChannel
         let state = self.audioState
+        // Nil delegates synchronously to prevent callbacks to deallocated self
+        pc?.delegate = nil
+        dc?.delegate = nil
         DispatchQueue.main.async {
             dc?.close()
             pc?.close()
@@ -545,8 +557,7 @@ public final class WebRTCManager: NSObject {
             print("[WebRTCManager] Playing audio buffers with format: \(connectionFormat) (reconnected player to mainMixerNode)")
         }
         
-        audioState.activeBuffersCount = buffers.count
-        audioState.onPlaybackFinished = completion
+        audioState.setupPlayback(count: buffers.count, completion: completion)
         
         if !player.isPlaying {
             player.play()
@@ -603,8 +614,7 @@ public final class WebRTCManager: NSObject {
             
             print("[WebRTCManager] Reconnected WebRTC input path: player (1.0 vol) & physical microphone (0.0 vol via micMixer) -> mainMixer -> destination")
             
-            audioState.activeBuffersCount = 1
-            audioState.onPlaybackFinished = completion
+            audioState.setupPlayback(count: 1, completion: completion)
             
             if !player.isPlaying {
                 player.play()
@@ -725,8 +735,8 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
     
     nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         print("[WebRTCManager] ICE connection state changed: \(newState.rawValue)")
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.delegate?.webRTCManager(self, didChangeConnectionState: newState)
         }
     }
@@ -736,8 +746,8 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
     }
     
     nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.delegate?.webRTCManager(self, didGenerateIceCandidate: candidate)
         }
     }
@@ -747,8 +757,8 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
     
     nonisolated public func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
         print("[WebRTCManager] Remote peer opened data channel '\(dataChannel.label)'.")
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.dataChannel = dataChannel
             dataChannel.delegate = self
             self.delegate?.webRTCManager(self, didChangeDataChannelState: dataChannel.readyState == .open)
@@ -762,8 +772,8 @@ extension WebRTCManager: RTCDataChannelDelegate {
     nonisolated public func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         print("[WebRTCManager] Data channel '\(dataChannel.label)' state changed: \(dataChannel.readyState.rawValue)")
         let isOpen = (dataChannel.readyState == .open)
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.delegate?.webRTCManager(self, didChangeDataChannelState: isOpen)
         }
     }
@@ -779,8 +789,8 @@ extension WebRTCManager: RTCDataChannelDelegate {
         }
         
         print("[WebRTCManager] Received message: \(message)")
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             self.delegate?.webRTCManager(self, didReceiveMessage: message)
         }
     }

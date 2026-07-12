@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct SpeechTurnUpdate: Equatable {
+struct SpeechTurnUpdate: Equatable, Sendable {
     var shouldInterruptPlayback = false
     var finalizedText: String?
     var shouldClearTranscript = false

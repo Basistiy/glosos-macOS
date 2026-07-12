@@ -8,14 +8,14 @@
 import SwiftUI
 import Combine
 
-struct OnboardingStep: Identifiable, Equatable {
+struct OnboardingStep: Identifiable, Equatable, Sendable {
     let id: Int
     let title: String
     var status: StepStatus
     var duration: TimeInterval?
     var detailText: String?
 
-    enum StepStatus: Equatable {
+    enum StepStatus: Equatable, Sendable {
         case pending
         case inProgress
         case completed

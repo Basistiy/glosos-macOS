@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct AuthUser: Codable, Equatable {
+public struct AuthUser: Codable, Equatable, Sendable {
     public let id: Int
     public let username: String
 
@@ -17,7 +17,7 @@ public struct AuthUser: Codable, Equatable {
     }
 }
 
-public struct AuthResponse: Codable, Equatable {
+public struct AuthResponse: Codable, Equatable, Sendable {
     public let message: String
     public let token: String
     public let user: AuthUser
@@ -29,7 +29,7 @@ public struct AuthResponse: Codable, Equatable {
     }
 }
 
-public struct AuthErrorResponse: Codable, Equatable {
+public struct AuthErrorResponse: Codable, Equatable, Sendable {
     public let error: String
 
     public init(error: String) {
@@ -37,7 +37,7 @@ public struct AuthErrorResponse: Codable, Equatable {
     }
 }
 
-public struct AppleAuthRequest: Codable, Equatable {
+public struct AppleAuthRequest: Codable, Equatable, Sendable {
     public let identityToken: String
     public let authorizationCode: String?
     public let userIdentifier: String

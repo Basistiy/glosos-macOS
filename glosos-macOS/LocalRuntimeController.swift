@@ -8,7 +8,7 @@
 import Combine
 import Foundation
 
-enum RuntimeMode: String, CaseIterable, Identifiable {
+enum RuntimeMode: String, CaseIterable, Identifiable, Sendable {
     case managedAppleContainer
     case manualEndpoint
     
@@ -24,7 +24,7 @@ enum RuntimeMode: String, CaseIterable, Identifiable {
     }
 }
 
-enum ModelProvider: String, CaseIterable, Identifiable {
+enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
     case gemini
     case localOpenAI
     case cerebras
@@ -43,7 +43,7 @@ enum ModelProvider: String, CaseIterable, Identifiable {
     }
 }
 
-enum RuntimeState: Equatable {
+enum RuntimeState: Equatable, Sendable {
     case stopped
     case starting
     case running

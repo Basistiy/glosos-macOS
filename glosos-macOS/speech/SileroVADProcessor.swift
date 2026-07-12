@@ -194,10 +194,12 @@ public actor SileroVADProcessor {
         set { onSpeechEndedClosure = newValue }
     }
 
+    // Convenience alias for property setter
     public func setOnSpeechStarted(_ closure: (@Sendable @MainActor () -> Void)?) {
         self.onSpeechStartedClosure = closure
     }
 
+    // Convenience alias for property setter
     public func setOnSpeechEnded(_ closure: (@Sendable @MainActor () -> Void)?) {
         self.onSpeechEndedClosure = closure
     }

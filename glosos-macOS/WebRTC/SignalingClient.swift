@@ -278,7 +278,9 @@ public actor SignalingClient {
             let lowercased = errorMsg.lowercased()
             if lowercased.contains("auth") || lowercased.contains("token") || lowercased.contains("expired") || lowercased.contains("invalid") {
                 print("[SignalingClient] Authentication error detected. Posting GlososAuthTokenExpired notification.")
-                NotificationCenter.default.post(name: NSNotification.Name("GlososAuthTokenExpired"), object: nil)
+                Task { @MainActor in
+                    NotificationCenter.default.post(name: NSNotification.Name("GlososAuthTokenExpired"), object: nil)
+                }
             }
             
             self.isExplicitDisconnect = true
@@ -287,47 +289,51 @@ public actor SignalingClient {
     }
     
     private func parseSocketIOEvent(_ jsonString: String) {
+        guard let data = jsonString.data(using: .utf8),
+              let jsonArray = try? JSONSerialization.jsonObject(with: data, options: []) as? [Any],
+              jsonArray.count >= 2,
+              let eventName = jsonArray[0] as? String else {
+            return
+        }
+        
+        let eventData = jsonArray[1]
         let currentDelegate = delegate
-        Task { @MainActor in
-            guard let data = jsonString.data(using: .utf8),
-                  let jsonArray = try? JSONSerialization.jsonObject(with: data, options: []) as? [Any],
-                  jsonArray.count >= 2,
-                  let eventName = jsonArray[0] as? String else {
+        
+        switch eventName {
+        case "incoming-call":
+            guard let payload = eventData as? [String: Any],
+                  let callerSocketId = payload["callerSocketId"] as? String,
+                  let callerUsername = payload["callerUsername"] as? String,
+                  let offer = payload["offer"] as? [String: Any] else {
                 return
             }
-            
-            let eventData = jsonArray[1]
-            
-            switch eventName {
-            case "incoming-call":
-                guard let payload = eventData as? [String: Any],
-                      let callerSocketId = payload["callerSocketId"] as? String,
-                      let callerUsername = payload["callerUsername"] as? String,
-                      let offer = payload["offer"] as? [String: Any] else {
-                    return
-                }
-                print("[SignalingClient] Incoming call from \(callerUsername) (\(callerSocketId))")
+            print("[SignalingClient] Incoming call from \(callerUsername) (\(callerSocketId))")
+            Task { @MainActor in
                 await currentDelegate?.signalingClient(self, didReceiveIncomingCall: callerSocketId, callerUsername: callerUsername, offer: offer)
-                
-            case "ice-candidate":
-                guard let payload = eventData as? [String: Any],
-                      let senderSocketId = payload["senderSocketId"] as? String,
-                      let candidate = payload["candidate"] as? [String: Any] else {
-                    return
-                }
-                await currentDelegate?.signalingClient(self, didReceiveIceCandidate: senderSocketId, candidate: candidate)
-                
-            case "hang-up":
-                guard let payload = eventData as? [String: Any],
-                      let senderSocketId = payload["senderSocketId"] as? String else {
-                    return
-                }
-                print("[SignalingClient] Call hung up by peer \(senderSocketId)")
-                await currentDelegate?.signalingClient(self, didReceiveHangUp: senderSocketId)
-                
-            default:
-                break
             }
+            
+        case "ice-candidate":
+            guard let payload = eventData as? [String: Any],
+                  let senderSocketId = payload["senderSocketId"] as? String,
+                  let candidate = payload["candidate"] as? [String: Any] else {
+                return
+            }
+            Task { @MainActor in
+                await currentDelegate?.signalingClient(self, didReceiveIceCandidate: senderSocketId, candidate: candidate)
+            }
+            
+        case "hang-up":
+            guard let payload = eventData as? [String: Any],
+                  let senderSocketId = payload["senderSocketId"] as? String else {
+                return
+            }
+            print("[SignalingClient] Call hung up by peer \(senderSocketId)")
+            Task { @MainActor in
+                await currentDelegate?.signalingClient(self, didReceiveHangUp: senderSocketId)
+            }
+            
+        default:
+            break
         }
     }
     

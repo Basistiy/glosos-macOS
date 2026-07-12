@@ -15,11 +15,14 @@ import MLXAudioTTS
 import MLXLMCommon
 import HuggingFace
 
+// SAFETY: Qwen3ASRModel is only ever accessed from one Task at a time, serialized by activeQwenGenerationTask.
 extension Qwen3ASRModel: @unchecked Sendable {}
+// SAFETY: Qwen3TTSModel is only ever accessed from one Task at a time, serialized by activeQwenGenerationTask.
 extension Qwen3TTSModel: @unchecked Sendable {}
+// SAFETY: AVAudioPCMBuffer is effectively immutable for read-only use — a known Apple SDK omission.
 extension AVAudioPCMBuffer: @unchecked Sendable {}
 
-enum ASRSystem: String, CaseIterable, Identifiable {
+enum ASRSystem: String, CaseIterable, Identifiable, Sendable {
     case apple = "apple"
     case qwen = "qwen"
     
@@ -32,7 +35,7 @@ enum ASRSystem: String, CaseIterable, Identifiable {
     }
 }
 
-enum TTSSystem: String, CaseIterable, Identifiable {
+enum TTSSystem: String, CaseIterable, Identifiable, Sendable {
     case apple = "apple"
     case qwen = "qwen"
     
@@ -45,12 +48,12 @@ enum TTSSystem: String, CaseIterable, Identifiable {
     }
 }
 
-struct QwenTTSVoiceOption: Hashable, Identifiable {
+struct QwenTTSVoiceOption: Hashable, Identifiable, Sendable {
     let id: String
     let name: String
 }
 
-enum QwenTTSState: Equatable {
+enum QwenTTSState: Equatable, Sendable {
     case idle
     case downloading(progress: Double, completedBytes: Int64, totalBytes: Int64)
     case loading
@@ -58,7 +61,7 @@ enum QwenTTSState: Equatable {
     case failed(message: String)
 }
 
-enum QwenASRState: Equatable {
+enum QwenASRState: Equatable, Sendable {
     case idle
     case downloading(progress: Double, completedBytes: Int64, totalBytes: Int64)
     case loading
@@ -801,11 +804,37 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 // We will use a continuation to suspend this task until the callbacks finish.
                 let synthesisSuccess = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                     final class SynthesisState: @unchecked Sendable {
-                        var audioFile: AVAudioFile? = nil
-                        var converter: AVAudioConverter? = nil
-                        var bufferCount = 0
-                        var writeFailed = false
-                        var continuationFinished = false
+                        private let lock = NSLock()
+                        private var _audioFile: AVAudioFile? = nil
+                        private var _converter: AVAudioConverter? = nil
+                        private var _bufferCount = 0
+                        private var _writeFailed = false
+                        private var _continuationFinished = false
+                        
+                        var audioFile: AVAudioFile? {
+                            get { lock.lock(); defer { lock.unlock() }; return _audioFile }
+                            set { lock.lock(); _audioFile = newValue; lock.unlock() }
+                        }
+                        var converter: AVAudioConverter? {
+                            get { lock.lock(); defer { lock.unlock() }; return _converter }
+                            set { lock.lock(); _converter = newValue; lock.unlock() }
+                        }
+                        var bufferCount: Int {
+                            get { lock.lock(); defer { lock.unlock() }; return _bufferCount }
+                            set { lock.lock(); _bufferCount = newValue; lock.unlock() }
+                        }
+                        var writeFailed: Bool {
+                            get { lock.lock(); defer { lock.unlock() }; return _writeFailed }
+                            set { lock.lock(); _writeFailed = newValue; lock.unlock() }
+                        }
+                        /// Returns true if the continuation was already finished, and marks it as finished.
+                        func tryFinishContinuation() -> Bool {
+                            lock.lock()
+                            defer { lock.unlock() }
+                            if _continuationFinished { return true }
+                            _continuationFinished = true
+                            return false
+                        }
                     }
                     
                     let state = SynthesisState()
@@ -815,8 +844,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                         if token.isCancelled {
                             state.writeFailed = true
                             state.audioFile = nil
-                            if !state.continuationFinished {
-                                state.continuationFinished = true
+                            if !state.tryFinishContinuation() {
                                 continuation.resume(returning: false)
                             }
                             return
@@ -830,8 +858,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                         if pcmBuffer.frameLength == 0 {
                             print("[SpeechController] Synthesis callback: frameLength is 0 (end of stream)")
                             state.audioFile = nil // Close the file
-                            if !state.continuationFinished {
-                                state.continuationFinished = true
+                            if !state.tryFinishContinuation() {
                                 continuation.resume(returning: !state.writeFailed)
                             }
                             return
@@ -850,8 +877,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                                 print("[SpeechController] [Error] Failed to create AVAudioConverter from \(pcmBuffer.format) to \(targetFormat)")
                                 state.writeFailed = true
                                 state.audioFile = nil
-                                if !state.continuationFinished {
-                                    state.continuationFinished = true
+                                if !state.tryFinishContinuation() {
                                     continuation.resume(returning: false)
                                 }
                                 return
@@ -867,8 +893,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                             print("[SpeechController] [Error] Failed to allocate output buffer for resampling")
                             state.writeFailed = true
                             state.audioFile = nil
-                            if !state.continuationFinished {
-                                state.continuationFinished = true
+                            if !state.tryFinishContinuation() {
                                 continuation.resume(returning: false)
                             }
                             return
@@ -890,8 +915,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                             print("[SpeechController] [Error] AVAudioConverter convert failed: \(error?.localizedDescription ?? "unknown error")")
                             state.writeFailed = true
                             state.audioFile = nil
-                            if !state.continuationFinished {
-                                state.continuationFinished = true
+                            if !state.tryFinishContinuation() {
                                 continuation.resume(returning: false)
                             }
                             return
@@ -913,8 +937,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                                 print("[SpeechController] Failed to write resampled buffer #\(state.bufferCount) to file: \(error.localizedDescription)")
                                 state.writeFailed = true
                                 state.audioFile = nil
-                                if !state.continuationFinished {
-                                    state.continuationFinished = true
+                                if !state.tryFinishContinuation() {
                                     continuation.resume(returning: false)
                                 }
                             }
@@ -1024,9 +1047,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         )
         log("Started recording WebRTC utterance stream to: \(fileURL.path)")
         
-        Task { @MainActor in
-            refreshStatusMessage()
-        }
+        refreshStatusMessage()
     }
 
     private func closeAudioFileIfNeeded() {
@@ -1037,9 +1058,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             }
             audioFile = nil
             audioFileURL = nil
-            Task { @MainActor in
-                refreshStatusMessage()
-            }
+            refreshStatusMessage()
         }
     }
 

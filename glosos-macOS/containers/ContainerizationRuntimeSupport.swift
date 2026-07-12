@@ -11,13 +11,13 @@ import ContainerizationError
 import ContainerizationExtras
 import Foundation
 
-enum ContainerizationSupportStatus: Equatable {
+enum ContainerizationSupportStatus: Equatable, Sendable {
     case supported
     case unsupported(message: String)
 }
 
 
-struct ContainerRuntimeAssets: Equatable {
+struct ContainerRuntimeAssets: Equatable, Sendable {
     let supportRootURL: URL
     let imageStoreURL: URL
     let kernelDirectoryURL: URL
@@ -899,7 +899,7 @@ final class FileHandleWriter: Writer, @unchecked Sendable {
     }
 }
 
-enum RuntimePreparationError: LocalizedError {
+enum RuntimePreparationError: LocalizedError, Sendable {
     case unsupported(String)
     case failed(String)
 
