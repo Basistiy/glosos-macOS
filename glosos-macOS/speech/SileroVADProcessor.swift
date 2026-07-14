@@ -6,10 +6,50 @@
 //
 
 import Foundation
-@preconcurrency import MLX
-import MLXAudioCore
-import MLXAudioVAD
-import HuggingFace
+import CoreML
+
+public enum SileroVADError: LocalizedError {
+    case modelNotReady
+    case predictionFailed(String)
+    
+    public var errorDescription: String? {
+        switch self {
+        case .modelNotReady:
+            return "VAD model is not loaded or ready."
+        case .predictionFailed(let details):
+            return "VAD inference prediction failed: \(details)"
+        }
+    }
+}
+
+nonisolated private func resampleAudio(_ samples: [Float], from inputRate: Int, to outputRate: Int) throws -> [Float] {
+    guard inputRate != outputRate else {
+        return samples
+    }
+    guard inputRate > 0 && outputRate > 0 else {
+        return samples
+    }
+    
+    let ratio = Double(inputRate) / Double(outputRate)
+    let outputCount = Int(Double(samples.count) / ratio)
+    guard outputCount > 0 else {
+        return []
+    }
+    
+    var resampled = [Float](repeating: 0, count: outputCount)
+    for i in 0..<outputCount {
+        let exactIdx = Double(i) * ratio
+        let idx = Int(exactIdx)
+        let nextIdx = min(idx + 1, samples.count - 1)
+        let weight = Float(exactIdx - Double(idx))
+        
+        let val1 = samples[idx]
+        let val2 = samples[nextIdx]
+        resampled[i] = val1 * (1.0 - weight) + val2 * weight
+    }
+    
+    return resampled
+}
 
 struct SileroChunkAccumulator {
     nonisolated static let targetSampleRate = 16_000
@@ -144,12 +184,33 @@ struct VADSpeechStateMachine {
 }
 
 public actor SileroVADProcessor {
-    private static let modelRepository = "mlx-community/silero-vad"
+
+    private struct StreamingState {
+        var h: MLMultiArray
+        var c: MLMultiArray
+        var last64Samples: [Float]
+        
+        static func initial() throws -> StreamingState {
+            let h = try MLMultiArray(shape: [1, 1, 128] as [NSNumber], dataType: .float32)
+            let c = try MLMultiArray(shape: [1, 1, 128] as [NSNumber], dataType: .float32)
+            
+            for i in 0..<128 {
+                h[[0, 0, i] as [NSNumber]] = 0.0 as NSNumber
+                c[[0, 0, i] as [NSNumber]] = 0.0 as NSNumber
+            }
+            
+            return StreamingState(
+                h: h,
+                c: c,
+                last64Samples: Array(repeating: 0.0, count: 64)
+            )
+        }
+    }
 
     private enum ModelState {
         case idle
         case loading
-        case ready(model: SileroVAD, state: SileroVADStreamingState?)
+        case ready(model: MLModel, state: StreamingState?)
         case failed(message: String)
     }
 
@@ -194,12 +255,10 @@ public actor SileroVADProcessor {
         set { onSpeechEndedClosure = newValue }
     }
 
-    // Convenience alias for property setter
     public func setOnSpeechStarted(_ closure: (@Sendable @MainActor () -> Void)?) {
         self.onSpeechStartedClosure = closure
     }
 
-    // Convenience alias for property setter
     public func setOnSpeechEnded(_ closure: (@Sendable @MainActor () -> Void)?) {
         self.onSpeechEndedClosure = closure
     }
@@ -220,7 +279,7 @@ public actor SileroVADProcessor {
         }
 
         modelState = .loading
-        logHandler("Loading Silero VAD model.")
+        logHandler("Loading Silero VAD CoreML model.")
 
         Task {
             do {
@@ -232,101 +291,25 @@ public actor SileroVADProcessor {
         }
     }
 
-    private func finalizeModelLoading(model: SileroVAD) {
+    private func finalizeModelLoading(model: MLModel) {
         self.modelState = .ready(model: model, state: nil)
         self.chunkAccumulator.reset()
         self.stateMachine.reset()
-        self.logHandler("Silero VAD ready.")
+        self.logHandler("Silero VAD CoreML ready.")
     }
 
     private func failModelLoading(message: String) {
         self.modelState = .failed(message: message)
-        self.logHandler("Silero VAD unavailable. Falling back to Apple Speech only. Error: \(message)")
+        self.logHandler("Silero VAD CoreML unavailable. Falling back to Apple Speech only. Error: \(message)")
     }
 
-    private func loadModel() async throws -> SileroVAD {
-        guard let repoID = Repo.ID(rawValue: Self.modelRepository) else {
-            throw SileroVADError.invalidRepositoryID(Self.modelRepository)
+    private func loadModel() async throws -> MLModel {
+        guard let modelURL = Bundle.main.url(forResource: "silero_vad", withExtension: "mlmodelc") else {
+            throw SileroVADError.modelNotReady
         }
-
-        let cache = HubCache.default
-        let modelDirectory = cache.cacheDirectory
-            .appendingPathComponent("mlx-audio")
-            .appendingPathComponent(Self.modelRepository.replacingOccurrences(of: "/", with: "_"))
-
-        if try validateCachedModel(at: modelDirectory, requiredExtension: "safetensors") {
-            return try SileroVAD.fromModelDirectory(modelDirectory)
-        }
-
-        if FileManager.default.fileExists(atPath: modelDirectory.path) {
-            logHandler("Cached Silero VAD files were incomplete. Re-downloading cleanly.")
-            clearCachedModel(at: modelDirectory, repoID: repoID, cache: cache)
-        }
-
-        try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
-
-        let progressReporter = ModelDownloadProgressReporter(modelName: "Silero VAD", logHandler: logHandler)
-        let client = HubClient(cache: cache)
-
-        _ = try await client.downloadSnapshot(
-            of: repoID,
-            kind: .model,
-            to: modelDirectory,
-            revision: "main",
-            matching: ["*.safetensors", "*.json", "*.txt", "*.wav"],
-            progressHandler: { progress in
-                progressReporter.report(progress)
-            }
-        )
-
-        guard try validateCachedModel(at: modelDirectory, requiredExtension: "safetensors") else {
-            clearCachedModel(at: modelDirectory, repoID: repoID, cache: cache)
-            throw ModelUtilsError.incompleteDownload(Self.modelRepository)
-        }
-
-        return try SileroVAD.fromModelDirectory(modelDirectory)
-    }
-
-    private func validateCachedModel(at modelDirectory: URL, requiredExtension: String) throws -> Bool {
-        guard FileManager.default.fileExists(atPath: modelDirectory.path) else {
-            return false
-        }
-
-        let files = try FileManager.default.contentsOfDirectory(
-            at: modelDirectory,
-            includingPropertiesForKeys: [.fileSizeKey]
-        )
-
-        let hasRequiredFile = files.contains { file in
-            guard file.pathExtension == requiredExtension else {
-                return false
-            }
-
-            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-            return size > 0
-        }
-
-        guard hasRequiredFile else {
-            return false
-        }
-
-        let configURL = modelDirectory.appendingPathComponent("config.json")
-        guard FileManager.default.fileExists(atPath: configURL.path) else {
-            return false
-        }
-
-        let configData = try Data(contentsOf: configURL)
-        _ = try JSONSerialization.jsonObject(with: configData)
-        return true
-    }
-
-    private func clearCachedModel(at modelDirectory: URL, repoID: Repo.ID, cache: HubCache) {
-        try? FileManager.default.removeItem(at: modelDirectory)
-
-        let hubRepoDirectory = cache.repoDirectory(repo: repoID, kind: .model)
-        if FileManager.default.fileExists(atPath: hubRepoDirectory.path) {
-            try? FileManager.default.removeItem(at: hubRepoDirectory)
-        }
+        let config = MLModelConfiguration()
+        config.computeUnits = .all
+        return try MLModel(contentsOf: modelURL, configuration: config)
     }
 
     public func resetSession() {
@@ -350,22 +333,46 @@ public actor SileroVADProcessor {
                 return
             }
 
-            var streamState = currentState
+            var streamState = try currentState ?? StreamingState.initial()
 
             for chunk in chunks {
-                if streamState == nil {
-                    streamState = try model.initialState(sampleRate: SileroChunkAccumulator.targetSampleRate)
+                // Construct audio input tensor of shape [1, 1, 576]
+                let audioMultiArray = try MLMultiArray(shape: [1, 1, 576] as [NSNumber], dataType: .float32)
+                
+                // Copy 64 context samples
+                for i in 0..<64 {
+                    audioMultiArray[[0, 0, i] as [NSNumber]] = NSNumber(value: streamState.last64Samples[i])
+                }
+                
+                // Copy 512 current samples
+                for i in 0..<512 {
+                    audioMultiArray[[0, 0, 64 + i] as [NSNumber]] = NSNumber(value: chunk[i])
                 }
 
-                let input = MLXArray(chunk)
-                let (probabilityArray, nextState) = try model.feed(
-                    chunk: input,
-                    state: streamState,
-                    sampleRate: SileroChunkAccumulator.targetSampleRate
+                let inputs: [String: Any] = [
+                    "audio": audioMultiArray,
+                    "h": streamState.h,
+                    "c": streamState.c
+                ]
+                
+                let featureProvider = try MLDictionaryFeatureProvider(dictionary: inputs)
+                let outputFeatures = try model.prediction(from: featureProvider)
+                
+                guard let probabilityArray = outputFeatures.featureValue(for: "probability")?.multiArrayValue,
+                      let hOut = outputFeatures.featureValue(for: "h_out")?.multiArrayValue,
+                      let cOut = outputFeatures.featureValue(for: "c_out")?.multiArrayValue else {
+                    throw SileroVADError.predictionFailed("CoreML output structure is invalid (missing probability, h_out, or c_out)")
+                }
+                
+                let probability = probabilityArray[0].floatValue
+                
+                // Update streamState
+                streamState = StreamingState(
+                    h: hOut,
+                    c: cOut,
+                    last64Samples: Array(chunk.suffix(64))
                 )
-                streamState = nextState
 
-                let probability = probabilityArray[0].item(Float.self)
                 switch self.stateMachine.ingest(probability: probability, now: Date().timeIntervalSinceReferenceDate) {
                 case .none:
                     break
