@@ -1068,6 +1068,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
         let fileURL = dirURL.appendingPathComponent("vocabulary.txt")
         if !FileManager.default.fileExists(atPath: fileURL.path) {
+            try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
             try? "Glosos".write(to: fileURL, atomically: true, encoding: .utf8)
             return ["Glosos"]
         }

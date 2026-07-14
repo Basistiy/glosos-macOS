@@ -194,6 +194,12 @@ final class LocalRuntimeController: ObservableObject {
         }
     }
 
+    @Published var customUserFolderPath: String {
+        didSet {
+            userDefaults.set(customUserFolderPath, forKey: Self.customUserFolderPathKey)
+        }
+    }
+
     @Published private(set) var runtimeState: RuntimeState = .stopped
     @Published private(set) var runtimeStatusDetail = "Stopped"
     @Published private(set) var lastRuntimeError: String?
@@ -215,6 +221,7 @@ final class LocalRuntimeController: ObservableObject {
     private static let managedLocalLLMApiBaseKey = "managedLocalLLMApiBase"
     private static let managedLocalLLMApiKeyKey = "managedLocalLLMApiKey"
     private static let managedCerebrasAPIKeyKey = "managedCerebrasAPIKey"
+    private static let customUserFolderPathKey = "customUserFolderPath"
     private static let agentEndpointURLKey = "agentEndpointURL"
     private static let legacyManualRuntimeMode = "manualWebSocket"
     private static let defaultManualEndpointURL = AgentEndpoint.defaultLocalBaseURLString
@@ -265,6 +272,7 @@ final class LocalRuntimeController: ObservableObject {
         self.managedCerebrasAPIKey = userDefaults.string(forKey: Self.managedCerebrasAPIKeyKey)
             ?? ProcessInfo.processInfo.environment["CEREBRAS_API_KEY"]
             ?? ""
+        self.customUserFolderPath = userDefaults.string(forKey: Self.customUserFolderPathKey) ?? ""
     }
 
     var computedEndpointURL: String {
@@ -284,6 +292,9 @@ final class LocalRuntimeController: ObservableObject {
     }
 
     var managedUserFolderURL: URL {
+        if !customUserFolderPath.isEmpty {
+            return URL(filePath: customUserFolderPath)
+        }
         if let assets = try? assetManager.existingAssets() {
             return assets.userWorkspaceURL
         }
@@ -305,6 +316,7 @@ final class LocalRuntimeController: ObservableObject {
         userDefaults.set(managedLocalLLMApiBase, forKey: Self.managedLocalLLMApiBaseKey)
         userDefaults.set(managedLocalLLMApiKey, forKey: Self.managedLocalLLMApiKeyKey)
         userDefaults.set(managedCerebrasAPIKey, forKey: Self.managedCerebrasAPIKeyKey)
+        userDefaults.set(customUserFolderPath, forKey: Self.customUserFolderPathKey)
     }
 
     func refreshStatus() async {

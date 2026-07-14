@@ -243,6 +243,12 @@ struct ContentView: View {
 
                     agentController.appendSystemMessage(newValue, state: .error)
                 }
+                .onChange(of: runtimeController.customUserFolderPath) { _, newValue in
+                    let newURL = runtimeController.managedUserFolderURL
+                    speechController.agentResponsesDirectoryURL = newURL
+                    try? FileManager.default.createDirectory(at: newURL, withIntermediateDirectories: true)
+                    _ = speechController.loadCustomVocabulary()
+                }
                 .onDisappear {
                     saveSettings()
                     agentController.disconnect()
@@ -932,8 +938,18 @@ private struct SettingsView: View {
                                         .multilineTextAlignment(.trailing)
                                         .textSelection(.enabled)
 
-                                    Button("Open in Finder") {
-                                        openManagedUserFolder()
+                                    HStack(spacing: 8) {
+                                        if !runtimeController.customUserFolderPath.isEmpty {
+                                            Button("Reset to Default") {
+                                                runtimeController.customUserFolderPath = ""
+                                            }
+                                        }
+                                        Button("Choose...") {
+                                            chooseCustomUserFolder()
+                                        }
+                                        Button("Open in Finder") {
+                                            openManagedUserFolder()
+                                        }
                                     }
                                 }
                             }
@@ -1546,6 +1562,29 @@ private struct SettingsView: View {
         }
 
         NSWorkspace.shared.open(userFolderURL)
+    }
+
+    private func chooseCustomUserFolder() {
+        let openPanel = NSOpenPanel()
+        openPanel.title = "Choose User Workspace Folder"
+        openPanel.showsResizeIndicator = true
+        openPanel.showsHiddenFiles = false
+        openPanel.canChooseFiles = false
+        openPanel.canChooseDirectories = true
+        openPanel.allowsMultipleSelection = false
+        
+        let currentFolder = runtimeController.managedUserFolderURL
+        if FileManager.default.fileExists(atPath: currentFolder.path(percentEncoded: false)) {
+            openPanel.directoryURL = currentFolder
+        }
+        
+        openPanel.begin { response in
+            if response == .OK, let selectedURL = openPanel.url {
+                Task { @MainActor in
+                    runtimeController.customUserFolderPath = selectedURL.path(percentEncoded: false)
+                }
+            }
+        }
     }
 
     private func syncPresetsWithController() {

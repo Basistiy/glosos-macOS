@@ -168,13 +168,19 @@ final class ApplicationSupportContainerAssetManager: @unchecked Sendable, Contai
 
     private func makeAssets() -> ContainerRuntimeAssets {
         let kernelDirectoryURL = supportRootURL.appendingPathComponent("kernel", isDirectory: true)
+        let userWorkspaceURL: URL
+        if let customPath = UserDefaults.standard.string(forKey: "customUserFolderPath"), !customPath.isEmpty {
+            userWorkspaceURL = URL(filePath: customPath)
+        } else {
+            userWorkspaceURL = supportRootURL.appendingPathComponent("user", isDirectory: true)
+        }
         return ContainerRuntimeAssets(
             supportRootURL: supportRootURL,
             imageStoreURL: supportRootURL.appendingPathComponent("image-store", isDirectory: true),
             kernelDirectoryURL: kernelDirectoryURL,
             kernelURL: kernelDirectoryURL.appendingPathComponent("vmlinux"),
             logsDirectoryURL: supportRootURL.appendingPathComponent("logs", isDirectory: true),
-            userWorkspaceURL: supportRootURL.appendingPathComponent("user", isDirectory: true)
+            userWorkspaceURL: userWorkspaceURL
         )
     }
 
@@ -186,7 +192,10 @@ final class ApplicationSupportContainerAssetManager: @unchecked Sendable, Contai
     }
 
     nonisolated static func defaultUserWorkspaceURL(fileManager: FileManager = .default) -> URL {
-        defaultSupportRootURL(fileManager: fileManager)
+        if let customPath = UserDefaults.standard.string(forKey: "customUserFolderPath"), !customPath.isEmpty {
+            return URL(filePath: customPath)
+        }
+        return defaultSupportRootURL(fileManager: fileManager)
             .appendingPathComponent("user", isDirectory: true)
     }
 
