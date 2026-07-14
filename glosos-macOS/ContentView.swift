@@ -423,20 +423,12 @@ struct ContentView: View {
             agentController?.abortActiveTurn()
             pendingUtteranceCoordinator.clear()
         }
-        speechController.conversationContextProvider = { [weak agentController] in
-            guard let agentController = agentController else { return "" }
-            let relevantMessages = agentController.messages
-                .filter { ($0.role == .user || $0.role == .assistant) && $0.state != .error && !$0.text.isEmpty }
-                .suffix(4)
-            guard !relevantMessages.isEmpty else { return "" }
-            
-            var contextLines = ["[Recent Conversation History]"]
-            for msg in relevantMessages {
-                let speaker = msg.role == .user ? "User" : "Assistant"
-                contextLines.append("\(speaker): \(msg.text)")
+        speechController.conversationContextProvider = { [weak speechController] in
+            guard let speechController = speechController else {
+                return "Use the correct spelling of target terms: Glosos"
             }
-            contextLines.append("[End of History - Transcribe the user's next audio response below]")
-            return contextLines.joined(separator: "\n")
+            let terms = speechController.loadCustomVocabulary()
+            return "Use the correct spelling of target terms: \(terms.joined(separator: ", "))"
         }
         speechController.isWebRTCConnected = p2pController.isConnected
         

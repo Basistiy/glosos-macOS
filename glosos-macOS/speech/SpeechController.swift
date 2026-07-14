@@ -1062,6 +1062,28 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    func loadCustomVocabulary() -> [String] {
+        guard let dirURL = agentResponsesDirectoryURL else {
+            return ["Glosos"]
+        }
+        let fileURL = dirURL.appendingPathComponent("vocabulary.txt")
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            try? "Glosos".write(to: fileURL, atomically: true, encoding: .utf8)
+            return ["Glosos"]
+        }
+        do {
+            let content = try String(contentsOf: fileURL, encoding: .utf8)
+            let terms = content
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return terms.isEmpty ? ["Glosos"] : terms
+        } catch {
+            print("[SpeechController] Failed to load vocabulary file: \(error)")
+            return ["Glosos"]
+        }
+    }
+
     private func transcribeAudioFile(at url: URL) {
         if selectedASRSystem == .qwen {
             transcribeAudioFileWithQwen(at: url)
@@ -1084,6 +1106,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
         
         let request = SFSpeechURLRecognitionRequest(url: url)
+        request.contextualStrings = loadCustomVocabulary()
         request.shouldReportPartialResults = false
         
         recognizer.recognitionTask(with: request) { [weak self] result, error in
