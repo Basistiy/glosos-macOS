@@ -227,7 +227,8 @@ public actor SignalingClient {
             // Send Socket.IO connect packet to the default namespace (40) with JWT Auth Token in payload
             let authPayload = [
                 "token": self.token,
-                "clientType": "mac-server"
+                "clientType": "mac-server",
+                "deviceModel": getDeviceModel()
             ]
             if let data = try? JSONSerialization.data(withJSONObject: authPayload, options: []),
                let jsonString = String(data: data, encoding: .utf8) {
@@ -473,6 +474,95 @@ public actor SignalingClient {
         ]
         
         return components.url
+    }
+
+    private func getDeviceModel() -> String {
+        var size = 0
+        sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: size)
+        sysctlbyname("hw.model", &model, &size, nil, 0)
+        let identifier = String(cString: model)
+        
+        // Exact lookup for newer "MacXX,Y" Apple Silicon identifiers
+        let knownModels: [String: String] = [
+            // Mac17 Series (M5 generation, 2026)
+            "Mac17,2": "MacBook Pro (14-inch, M5, 2026)",
+            "Mac17,3": "MacBook Air (13-inch, M5, 2026)",
+            "Mac17,4": "MacBook Air (15-inch, M5, 2026)",
+            "Mac17,6": "MacBook Pro (16-inch, M5 Pro/Max, 2026)",
+            "Mac17,7": "MacBook Pro (14-inch, M5 Pro/Max, 2026)",
+            "Mac17,8": "MacBook Pro (16-inch, M5 Pro/Max, 2026)",
+            "Mac17,9": "MacBook Pro (14-inch, M5 Pro/Max, 2026)",
+            
+            // Mac16 Series (M4 generation, 2024-2025)
+            "Mac16,1": "Mac mini (M4, 2024)",
+            "Mac16,2": "MacBook Pro (14-inch, M4, 2024)",
+            "Mac16,3": "MacBook Pro (14-inch, M4, 2024)",
+            "Mac16,5": "MacBook Pro (16-inch, M4, 2024)",
+            "Mac16,6": "MacBook Pro (14-inch, M4 Pro/Max, 2024)",
+            "Mac16,7": "MacBook Pro (16-inch, M4 Pro/Max, 2024)",
+            "Mac16,8": "MacBook Pro (14-inch, M4 Pro/Max, 2024)",
+            "Mac16,9": "Mac Studio (M4, 2025)",
+            "Mac16,10": "MacBook Pro (14-inch, M4, 2024)",
+            "Mac16,11": "Mac mini (M4 Pro, 2024)",
+            "Mac16,13": "MacBook Air (15-inch, M4, 2025)",
+            "Mac16,15": "MacBook Air (13-inch, M4, 2025)",
+
+            // Mac15 Series (M3 generation, 2023-2024)
+            "Mac15,3": "MacBook Pro (14-inch, M3, 2023)",
+            "Mac15,4": "MacBook Pro (14-inch, M3, 2023)",
+            "Mac15,5": "MacBook Pro (14-inch, M3 Pro/Max, 2023)",
+            "Mac15,6": "MacBook Pro (14-inch, M3 Pro/Max, 2023)",
+            "Mac15,7": "MacBook Pro (16-inch, M3 Pro/Max, 2023)",
+            "Mac15,8": "MacBook Pro (14-inch, M3 Pro/Max, 2023)",
+            "Mac15,9": "MacBook Pro (16-inch, M3 Pro/Max, 2023)",
+            "Mac15,10": "iMac (24-inch, M3, 2023)",
+            "Mac15,11": "MacBook Pro (16-inch, M3 Pro/Max, 2023)",
+            "Mac15,12": "MacBook Air (13-inch, M3, 2024)",
+            "Mac15,13": "MacBook Air (15-inch, M3, 2024)",
+            "Mac15,14": "Mac Studio (M3, 2024)",
+            
+            // Mac14 Series (M2 generation, 2022-2023)
+            "Mac14,2": "MacBook Air (13-inch, M2, 2022)",
+            "Mac14,3": "Mac mini (M2, 2023)",
+            "Mac14,5": "MacBook Pro (14-inch, M2 Pro, 2023)",
+            "Mac14,6": "MacBook Pro (16-inch, M2 Max, 2023)",
+            "Mac14,7": "MacBook Pro (13-inch, M2, 2022)",
+            "Mac14,8": "Mac Pro (M2 Ultra, 2023)",
+            "Mac14,9": "MacBook Pro (14-inch, M2 Pro/Max, 2023)",
+            "Mac14,10": "MacBook Pro (16-inch, M2 Pro/Max, 2023)",
+            "Mac14,12": "Mac mini (M2 Pro, 2023)",
+            "Mac14,13": "Mac Studio (M2 Max, 2023)",
+            "Mac14,14": "Mac Studio (M2 Ultra, 2023)",
+            "Mac14,15": "MacBook Air (15-inch, M2, 2023)",
+            
+            // Mac13 Series (M1 Ultra/Max Studio etc.)
+            "Mac13,1": "Mac Studio (M1 Max, 2022)",
+            "Mac13,2": "Mac Studio (M1 Ultra, 2022)",
+        ]
+        
+        if let knownName = knownModels[identifier] {
+            return knownName
+        }
+        
+        // Fallback prefix parsing for older Intel and Apple Silicon Macs
+        if identifier.hasPrefix("MacBookAir") {
+            return "MacBook Air (\(identifier))"
+        } else if identifier.hasPrefix("MacBookPro") {
+            return "MacBook Pro (\(identifier))"
+        } else if identifier.hasPrefix("Macmini") {
+            return "Mac mini (\(identifier))"
+        } else if identifier.hasPrefix("MacStudio") {
+            return "Mac Studio (\(identifier))"
+        } else if identifier.hasPrefix("iMac") {
+            return "iMac (\(identifier))"
+        } else if identifier.hasPrefix("MacPro") {
+            return "Mac Pro (\(identifier))"
+        } else if identifier.hasPrefix("MacBook") {
+            return "MacBook (\(identifier))"
+        }
+        
+        return "Mac (\(identifier))"
     }
 }
 
