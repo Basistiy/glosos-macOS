@@ -738,7 +738,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     self.finishPlayback(wasInterrupted: false)
                 }
                 
-                let pcmStream = model.generatePCMBufferStream(
+                let samplesStream = model.generateSamplesStream(
                     text: text,
                     voice: selectedVoice,
                     refAudio: nil,
@@ -754,8 +754,21 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 )
                 
                 do {
-                    for try await buffer in pcmStream {
-                        if !playbackToken.isCancelled && !Task.isCancelled {
+                    let sampleRate = model.sampleRate
+                    for try await samples in samplesStream {
+                        if playbackToken.isCancelled || Task.isCancelled {
+                            break
+                        }
+                        
+                        let frameCount = AVAudioFrameCount(samples.count)
+                        if frameCount > 0,
+                           let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sampleRate), channels: 1, interleaved: false),
+                           let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
+                           let channel = buffer.floatChannelData?[0] {
+                            buffer.frameLength = frameCount
+                            for i in 0..<samples.count {
+                                channel[i] = samples[i]
+                            }
                             submitHandler?(buffer)
                         }
                     }
