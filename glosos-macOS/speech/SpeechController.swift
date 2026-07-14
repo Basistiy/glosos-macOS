@@ -1167,11 +1167,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let hfToken: String? = ProcessInfo.processInfo.environment["HF_TOKEN"]
                     ?? Bundle.main.object(forInfoDictionaryKey: "HF_TOKEN") as? String
                 
-                guard let repoID = Repo.ID(rawValue: "mlx-community/Qwen3-ASR-1.7B-bf16") else {
+                guard let repoID = Repo.ID(rawValue: "mlx-community/Qwen3-ASR-0.6B-4bit") else {
                     throw NSError(
                         domain: "SpeechController",
                         code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: mlx-community/Qwen3-ASR-1.7B-bf16"]
+                        userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: mlx-community/Qwen3-ASR-0.6B-4bit"]
                     )
                 }
                 
@@ -1254,7 +1254,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                     let directory = destination.deletingLastPathComponent()
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     
-                    let url = URL(string: "https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-bf16/resolve/main/\(entry.path)")!
+                    let url = URL(string: "https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-4bit/resolve/main/\(entry.path)")!
                     var request = URLRequest(url: url)
                     request.cachePolicy = .reloadIgnoringLocalCacheData
                     if let token = hfToken, !token.isEmpty {

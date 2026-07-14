@@ -249,6 +249,10 @@ final class AgentConnectionController: ObservableObject {
                         }
                     }
                 )
+
+                await MainActor.run { [weak self] in
+                    self?.finalizeAssistantTurn(with: nil)
+                }
             } catch {
                 let isCancelled = Task.isCancelled ||
                     error is CancellationError ||
