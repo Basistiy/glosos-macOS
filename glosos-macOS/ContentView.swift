@@ -745,7 +745,6 @@ private struct SettingsView: View {
     
     private let containerImagePresets = [
         ("docker.io/evbasistyi/glosos-google-user:latest", "Google User (Docker Hub)"),
-        ("docker.io/evbasistyi/glosos-local-container:latest", "Local Container (Docker Hub)"),
         ("docker.io/evbasistyi/glosos-cerebras-user:latest", "Cerebras Container (Docker Hub)")
     ]
 
@@ -1487,10 +1486,7 @@ private struct SettingsView: View {
             if newValue != "custom" {
                 runtimeController.managedContainerImage = newValue
                 
-                // Automatically sync the container name to avoid configuration mismatches
-                if newValue == "docker.io/evbasistyi/glosos-local-container:latest" {
-                    runtimeController.managedContainerName = "glosos-local-container-macos"
-                } else if newValue == "docker.io/evbasistyi/glosos-google-user:latest" || newValue == "ghcr.io/basistiy/glosos-google-user:latest" {
+                if newValue == "docker.io/evbasistyi/glosos-google-user:latest" || newValue == "ghcr.io/basistiy/glosos-google-user:latest" {
                     runtimeController.managedContainerName = "glosos-google-user-macos"
                 } else if newValue == "docker.io/evbasistyi/glosos-cerebras-user:latest" {
                     runtimeController.managedContainerName = "glosos-cerebras-user-macos"
