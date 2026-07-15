@@ -26,7 +26,7 @@ enum RuntimeMode: String, CaseIterable, Identifiable, Sendable {
 
 enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
     case gemini
-    case localOpenAI
+    case custom
     case cerebras
 
     var id: String { rawValue }
@@ -35,8 +35,8 @@ enum ModelProvider: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .gemini:
             return "Google Gemini"
-        case .localOpenAI:
-            return "Local LLM (OpenAI SDK / Ollama)"
+        case .custom:
+            return "Custom"
         case .cerebras:
             return "Cerebras Inference"
         }
@@ -85,7 +85,7 @@ struct ManagedContainerConfiguration: Equatable, Sendable {
             variables.append("GOOGLE_GENAI_USE_VERTEXAI=false")
             let key = (googleAPIKey == nil || googleAPIKey!.isEmpty) ? "placeholder_key" : googleAPIKey!
             variables.append("GOOGLE_API_KEY=\(key)")
-        case .localOpenAI:
+        case .custom:
             if let localLLMApiBase {
                 variables.append("OPENAI_BASE_URL=\(localLLMApiBase)")
                 variables.append("OPENAI_API_BASE=\(localLLMApiBase)")
@@ -485,7 +485,7 @@ final class LocalRuntimeController: ObservableObject {
         switch managedModelProvider {
         case .gemini:
             guard !googleAPIKey.isEmpty else { return nil }
-        case .localOpenAI:
+        case .custom:
             guard !localLLMApiBase.isEmpty else { return nil }
         case .cerebras:
             guard !cerebrasAPIKey.isEmpty else { return nil }
@@ -508,8 +508,8 @@ final class LocalRuntimeController: ObservableObject {
         switch managedModelProvider {
         case .gemini:
             return "Enter a valid image, container name, and model name for the managed runtime."
-        case .localOpenAI:
-            return "Enter a valid image, container name, model name, and Local API Base URL for the managed runtime."
+        case .custom:
+            return "Enter a valid image, container name, model name, and Custom API Base URL for the managed runtime."
         case .cerebras:
             return "Enter a valid image, container name, and model name for the managed runtime."
         }
@@ -519,8 +519,8 @@ final class LocalRuntimeController: ObservableObject {
         switch managedModelProvider {
         case .gemini:
             return "Managed runtime is waiting for a Google API key."
-        case .localOpenAI:
-            return "Managed runtime is waiting for Local API Base URL."
+        case .custom:
+            return "Managed runtime is waiting for Custom API Base URL."
         case .cerebras:
             return "Managed runtime is waiting for a Cerebras API key."
         }

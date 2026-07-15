@@ -743,21 +743,6 @@ private struct SettingsView: View {
         "gemini-3.1-flash-lite"
     ]
     
-    private let localBasePresets = [
-        "http://192.168.64.1:11434/v1": "Ollama (VM Bridge)",
-        "http://192.168.64.1:1234/v1": "LM Studio (VM Bridge)",
-        "http://localhost:11434/v1": "Ollama (Localhost)",
-        "http://localhost:1234/v1": "LM Studio (Localhost)"
-    ]
-    
-    private let localModelPresets = [
-        "llama3",
-        "llama3:8b",
-        "mistral",
-        "gemma2",
-        "phi3"
-    ]
-
     private let containerImagePresets = [
         ("docker.io/evbasistyi/glosos-google-user:latest", "Google User (Docker Hub)"),
         ("docker.io/evbasistyi/glosos-local-container:latest", "Local Container (Docker Hub)"),
@@ -785,8 +770,6 @@ private struct SettingsView: View {
 
     @State private var geminiModelSelection: String = ""
     @State private var cerebrasModelSelection: String = ""
-    @State private var localBaseSelection: String = ""
-    @State private var localModelSelection: String = ""
     @State private var containerImageSelection: String = ""
 
     var body: some View {
@@ -849,32 +832,10 @@ private struct SettingsView: View {
                                         .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
                                 }
 
-                            case .localOpenAI:
-                                Picker("API Base URL", selection: $localBaseSelection) {
-                                    ForEach(localBasePresets.keys.sorted(), id: \.self) { key in
-                                        Text(localBasePresets[key] ?? "").tag(key)
-                                    }
-                                    Text("Custom URL...").tag("custom")
-                                }
-                                .pickerStyle(.menu)
-                                
-                                if localBaseSelection == "custom" {
-                                    TextField("Custom API Base URL", text: $runtimeController.managedLocalLLMApiBase)
-                                }
-
+                            case .custom:
+                                TextField("API Base URL", text: $runtimeController.managedLocalLLMApiBase)
                                 SecureField("API Key (optional)", text: $runtimeController.managedLocalLLMApiKey)
-
-                                Picker("Model name", selection: $localModelSelection) {
-                                    ForEach(localModelPresets, id: \.self) { preset in
-                                        Text(preset).tag(preset)
-                                    }
-                                    Text("Custom Model...").tag("custom")
-                                }
-                                .pickerStyle(.menu)
-
-                                if localModelSelection == "custom" {
-                                    TextField("Custom Model Name", text: $runtimeController.managedModelName)
-                                }
+                                TextField("Model Name", text: $runtimeController.managedModelName)
 
                             case .cerebras:
                                 Picker("Model name", selection: $cerebrasModelSelection) {
@@ -1522,16 +1483,6 @@ private struct SettingsView: View {
                 runtimeController.managedModelName = newValue
             }
         }
-        .onChange(of: localModelSelection) { _, newValue in
-            if newValue != "custom" {
-                runtimeController.managedModelName = newValue
-            }
-        }
-        .onChange(of: localBaseSelection) { _, newValue in
-            if newValue != "custom" {
-                runtimeController.managedLocalLLMApiBase = newValue
-            }
-        }
         .onChange(of: containerImageSelection) { _, newValue in
             if newValue != "custom" {
                 runtimeController.managedContainerImage = newValue
@@ -1598,18 +1549,6 @@ private struct SettingsView: View {
             cerebrasModelSelection = runtimeController.managedModelName
         } else {
             cerebrasModelSelection = "custom"
-        }
-        
-        if localBasePresets.keys.contains(runtimeController.managedLocalLLMApiBase) {
-            localBaseSelection = runtimeController.managedLocalLLMApiBase
-        } else {
-            localBaseSelection = "custom"
-        }
-
-        if localModelPresets.contains(runtimeController.managedModelName) {
-            localModelSelection = runtimeController.managedModelName
-        } else {
-            localModelSelection = "custom"
         }
 
         if containerImagePresets.contains(where: { $0.0 == runtimeController.managedContainerImage }) {
