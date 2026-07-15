@@ -490,6 +490,7 @@ struct ContentView: View {
             return
         }
 
+        initialConfiguration = runtimeController.resolvedConfiguration
         _ = await runtimeController.startRuntime()
     }
 
@@ -508,6 +509,7 @@ struct ContentView: View {
 
     private func restartManagedRuntime() async {
         agentController.disconnect()
+        initialConfiguration = runtimeController.resolvedConfiguration
         let didRestart = await runtimeController.restartRuntime()
         guard didRestart, let endpoint = runtimeController.currentManagedEndpoint else {
             return

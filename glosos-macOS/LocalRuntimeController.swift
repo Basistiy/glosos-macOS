@@ -353,6 +353,11 @@ final class LocalRuntimeController: ObservableObject {
     }
 
     func startRuntime() async -> Bool {
+        guard runtimeState == .stopped || runtimeState == .failed else {
+            print("[LocalRuntimeController] startRuntime called, but state is \(runtimeState). Ignoring.")
+            return false
+        }
+
         lastRuntimeError = nil
         recentLogs = ""
         currentManagedEndpoint = nil
@@ -415,6 +420,11 @@ final class LocalRuntimeController: ObservableObject {
     }
 
     func stopRuntime() async {
+        guard runtimeState == .running || runtimeState == .starting || runtimeState == .failed else {
+            print("[LocalRuntimeController] stopRuntime called, but state is \(runtimeState). Ignoring.")
+            return
+        }
+
         lastRuntimeError = nil
 
 

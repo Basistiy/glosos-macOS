@@ -426,6 +426,7 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
     nonisolated private static let imageReferenceMarkerFilename = ".glosos-image-reference"
 
     private var session: ActiveSession?
+    private var sharedNetwork: VmnetNetwork?
 
     func currentEndpoint(containerName: String) async -> ManagedRuntimeEndpoint? {
         guard session?.containerName == containerName else {
@@ -446,7 +447,13 @@ actor ContainerizationRuntimeEngine: ContainerRuntimeManaging {
         let kernel = Kernel(path: assets.kernelURL, platform: .linuxArm)
 
         await updateStatus("Starting vmnet network...")
-        let network = try VmnetNetwork()
+        let network: VmnetNetwork
+        if let existing = self.sharedNetwork {
+            network = existing
+        } else {
+            network = try VmnetNetwork()
+            self.sharedNetwork = network
+        }
         if reuseCachedFilesystem {
             // Allow the virtual network interface to settle and configure on the host before booting the VM.
             // When reusing cached filesystem, the VM starts up very fast (2-3s) which can beat the host DHCP configuration.
