@@ -10,7 +10,9 @@ import SwiftUI
 import AVFoundation
 
 struct ContentView: View {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    private var appDelegate: AppDelegate? {
+        NSApplication.shared.delegate as? AppDelegate
+    }
     @ObservedObject var authManager: AuthManager
     @StateObject private var speechController = SpeechController()
     @StateObject private var agentController = AgentConnectionController()
@@ -161,14 +163,6 @@ struct ContentView: View {
                         agentController.sendUserMessage(newValue)
                     }
                 }
-                .onChange(of: authManager.token) { _, newToken in
-                    if let newToken = newToken {
-                        p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: newToken)
-                    } else {
-                        p2pController.disconnect(isUserInitiated: true)
-                        p2pController.clearMessages()
-                    }
-                }
                 .onChange(of: p2pController.isConnected) { _, isConnected in
                     speechController.isWebRTCConnected = isConnected
                     if isConnected {
@@ -252,11 +246,28 @@ struct ContentView: View {
                 .onDisappear {
                     saveSettings()
                     agentController.disconnect()
-                    p2pController.disconnect(isUserInitiated: true)
+                    Task {
+                        await p2pController.disconnect(isUserInitiated: true)
+                    }
                     speechController.stopContinuousListening()
                 }
                 .onAppear {
                     setupAppDelegateOnTerminate()
+                    if speechController.isReadyForLiveTranscription {
+                        Task {
+                            await speechController.startContinuousListening()
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: authManager.token) { _, newToken in
+            Task {
+                if let newToken = newToken {
+                    await p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: newToken)
+                } else {
+                    await p2pController.disconnect(isUserInitiated: true)
+                    p2pController.clearMessages()
                 }
             }
         }
@@ -454,7 +465,7 @@ struct ContentView: View {
         await connectUsingSelectedRuntime()
         
         if let token = authManager.token {
-            p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: token)
+            await p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: token)
         }
         
         // Sync initial mute state
@@ -500,7 +511,7 @@ struct ContentView: View {
     }
 
     private func setupAppDelegateOnTerminate() {
-        appDelegate.onTerminate = { [weak runtimeController, weak agentController] in
+        appDelegate?.onTerminate = { [weak runtimeController, weak agentController] in
             guard let runtimeController = runtimeController, let agentController = agentController else { return }
             agentController.disconnect()
             await runtimeController.stopRuntime()
@@ -1559,18 +1570,4 @@ private struct SettingsView: View {
 
 #Preview {
     ContentView(authManager: AuthManager())
-}
-
-@MainActor
-class AppDelegate: NSObject, NSApplicationDelegate {
-    var onTerminate: (() async -> Void)?
-    
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let onTerminate = onTerminate else { return .terminateNow }
-        Task {
-            await onTerminate()
-            NSApp.reply(toApplicationShouldTerminate: true)
-        }
-        return .terminateLater
-    }
 }

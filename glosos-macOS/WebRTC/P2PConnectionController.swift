@@ -94,14 +94,20 @@ final class P2PConnectionController: ObservableObject {
         }
     }
     
-    func startSignaling(apiEndpoint: String, token: String) {
+    func startSignaling(apiEndpoint: String, token: String) async {
+        // If we are already connected or connecting to the exact same endpoint and token, do nothing
+        if lastSavedApiEndpoint == apiEndpoint && lastSavedToken == token && (isConnected || signalingClient != nil) {
+            print("[P2PConnectionController] Already connected or connecting to the same endpoint and token. Skipping startSignaling.")
+            return
+        }
+
         // Save credentials for network self-healing
         self.lastSavedApiEndpoint = apiEndpoint
         self.lastSavedToken = token
         self.hasGivenUpReconnecting = false // Reset given up state
         
         // Disconnect any existing session first (do NOT clear credentials)
-        disconnect(isUserInitiated: false)
+        await disconnect(isUserInitiated: false)
         
         // Start network monitoring
         startPathMonitoring()
@@ -124,7 +130,7 @@ final class P2PConnectionController: ObservableObject {
         }
     }
     
-    func disconnect(isUserInitiated: Bool = false) {
+    func disconnect(isUserInitiated: Bool = false) async {
         if isUserInitiated {
             // User explicitly requested disconnect: stop monitoring and forget credentials
             self.lastSavedApiEndpoint = nil
@@ -137,17 +143,11 @@ final class P2PConnectionController: ObservableObject {
         
         if let callerId = currentCallerSocketId {
             print("[P2PConnectionController] Sending hang-up to peer \(callerId)...")
-            Task {
-                await client?.sendHangUp(targetSocketId: callerId)
-                await client?.setDelegate(nil)
-                await client?.disconnect()
-            }
-        } else {
-            Task {
-                await client?.setDelegate(nil)
-                await client?.disconnect()
-            }
+            await client?.sendHangUp(targetSocketId: callerId)
         }
+        
+        await client?.setDelegate(nil)
+        await client?.disconnect()
         
         cleanupCall()
         statusDetail = "Disconnected"
@@ -189,7 +189,9 @@ final class P2PConnectionController: ObservableObject {
             if let apiEndpoint = lastSavedApiEndpoint,
                let token = lastSavedToken {
                 print("[P2PConnectionController] Network path is satisfied. Re-initiating signaling connection...")
-                startSignaling(apiEndpoint: apiEndpoint, token: token)
+                Task {
+                    await startSignaling(apiEndpoint: apiEndpoint, token: token)
+                }
             }
         }
     }

@@ -512,7 +512,7 @@ class PresentationContextProvider: NSObject, ASWebAuthenticationPresentationCont
 }
 
 // MARK: - JWT Decoder Helpers
-private struct JWTPayload: Codable {
+nonisolated private struct JWTPayload: Codable {
     let exp: Double?
 }
 

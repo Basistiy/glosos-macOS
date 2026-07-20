@@ -194,6 +194,18 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     @Published var isWebRTCConnected = false {
         didSet {
             playbackSynthesizer.delegate = isWebRTCConnected ? nil : self
+            if !isWebRTCConnected {
+                if isRecordingUtterance {
+                    log("WebRTC disconnected while recording. Stopping recording.")
+                    isRecordingUtterance = false
+                    closeAudioFileIfNeeded()
+                }
+                prerollBuffers.removeAll()
+                let vad = self.vadProcessor
+                Task {
+                    await vad?.resetSession()
+                }
+            }
         }
     }
 

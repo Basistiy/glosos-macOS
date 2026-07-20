@@ -6,9 +6,25 @@
 //
 
 import SwiftUI
+import AppKit
+
+@MainActor
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var onTerminate: (() async -> Void)?
+    
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let onTerminate = onTerminate else { return .terminateNow }
+        Task {
+            await onTerminate()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
 
 @main
 struct glosos_macOSApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var authManager = AuthManager()
 
     init() {
