@@ -20,14 +20,25 @@ public struct AuthUser: Codable, Equatable, Sendable {
 public struct AuthResponse: Codable, Equatable, Sendable {
     public let message: String
     public let token: String
+    public let refreshToken: String?
     public let user: AuthUser
 
-    public init(message: String, token: String, user: AuthUser) {
+    public init(message: String, token: String, refreshToken: String?, user: AuthUser) {
         self.message = message
         self.token = token
+        self.refreshToken = refreshToken
         self.user = user
     }
 }
+
+public struct RefreshResponse: Codable, Equatable, Sendable {
+    public let token: String
+
+    public init(token: String) {
+        self.token = token
+    }
+}
+
 
 public struct AuthErrorResponse: Codable, Equatable, Sendable {
     public let error: String
