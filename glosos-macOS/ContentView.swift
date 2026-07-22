@@ -442,9 +442,12 @@ struct ContentView: View {
         }
         speechController.conversationContextProvider = { [weak speechController] in
             guard let speechController = speechController else {
-                return "Use the correct spelling of target terms: Glosos"
+                return ""
             }
             let terms = speechController.loadCustomVocabulary()
+            if terms.isEmpty {
+                return ""
+            }
             return "Use the correct spelling of target terms: \(terms.joined(separator: ", "))"
         }
         speechController.isWebRTCConnected = p2pController.isConnected

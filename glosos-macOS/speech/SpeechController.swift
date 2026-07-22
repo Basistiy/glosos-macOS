@@ -1089,13 +1089,13 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     func loadCustomVocabulary() -> [String] {
         guard let dirURL = agentResponsesDirectoryURL else {
-            return ["Glosos"]
+            return []
         }
         let fileURL = dirURL.appendingPathComponent("vocabulary.txt")
         if !FileManager.default.fileExists(atPath: fileURL.path) {
             try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
-            try? "Glosos".write(to: fileURL, atomically: true, encoding: .utf8)
-            return ["Glosos"]
+            try? "".write(to: fileURL, atomically: true, encoding: .utf8)
+            return []
         }
         do {
             let content = try String(contentsOf: fileURL, encoding: .utf8)
@@ -1103,10 +1103,10 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 .components(separatedBy: .newlines)
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
-            return terms.isEmpty ? ["Glosos"] : terms
+            return terms
         } catch {
             print("[SpeechController] Failed to load vocabulary file: \(error)")
-            return ["Glosos"]
+            return []
         }
     }
 
