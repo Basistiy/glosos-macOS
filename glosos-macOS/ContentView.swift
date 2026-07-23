@@ -1469,21 +1469,6 @@ private struct SettingsView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-
-                            Divider()
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text("Echo Cancellation Warmup")
-                                    Spacer()
-                                    Text(String(format: "%.2f s", speechController.echoCancellationWarmupDuration))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Slider(value: $speechController.echoCancellationWarmupDuration, in: 0.0 ... 3.0, step: 0.25)
-                                Text("Suppresses speech recognition and agent interruptions while Safari/WebRTC echo cancellation sets up.")
-                                    .font(.system(.footnote, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                            }
                         }
                         .padding(.vertical, 4)
                     }

@@ -205,21 +205,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 Task {
                     await vad?.resetSession()
                 }
-            } else if !oldValue {
-                triggerEchoCancellationWarmup()
             }
         }
     }
-
-    @Published var echoCancellationWarmupDuration: Double {
-        didSet {
-            guard echoCancellationWarmupDuration != oldValue else { return }
-            userDefaults.set(echoCancellationWarmupDuration, forKey: Self.echoCancellationWarmupDurationKey)
-        }
-    }
-
-    @Published private(set) var isEchoCancellationWarmingUp = false
-    private var echoCancellationWarmupEndTime: Date?
 
     @Published var vadStartThreshold: Float {
         didSet {
@@ -372,7 +360,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     private static let vadEndFramesKey = "vadEndFrames"
     private static let vadNoiseGateEnabledKey = "vadNoiseGateEnabled"
     private static let vadNoiseGateDecibelsKey = "vadNoiseGateDecibels"
-    private static let echoCancellationWarmupDurationKey = "echoCancellationWarmupDuration"
 
     private var vadProcessor: SileroVADProcessor?
     private var isRecordingUtterance = false
@@ -383,9 +370,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let selectedLanguage = Self.loadSavedLanguage(from: userDefaults)
         self.userDefaults = userDefaults
         self.selectedLanguage = selectedLanguage
-        
-        let warmupDuration = userDefaults.object(forKey: Self.echoCancellationWarmupDurationKey) as? Double ?? 1.5
-        self.echoCancellationWarmupDuration = warmupDuration
         
         let usePV = userDefaults.bool(forKey: Self.usePersonalVoiceKey)
         let selectedPVID = userDefaults.string(forKey: Self.selectedPersonalVoiceIdentifierKey)
@@ -534,43 +518,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
-    func triggerEchoCancellationWarmup(duration: TimeInterval? = nil) {
-        let warmupDuration = duration ?? echoCancellationWarmupDuration
-        guard warmupDuration > 0 else {
-            isEchoCancellationWarmingUp = false
-            echoCancellationWarmupEndTime = nil
-            return
-        }
-        
-        log("Triggering Echo Cancellation warmup window (\(warmupDuration)s)")
-        isEchoCancellationWarmingUp = true
-        echoCancellationWarmupEndTime = Date().addingTimeInterval(warmupDuration)
-        
-        prerollBuffers.removeAll()
-        
-        if isRecordingUtterance {
-            isRecordingUtterance = false
-            if let fileURL = audioFileURL {
-                try? FileManager.default.removeItem(at: fileURL)
-            }
-            audioFile = nil
-            audioFileURL = nil
-        }
-        
-        let vad = self.vadProcessor
-        Task {
-            await vad?.resetSession()
-        }
-        
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(warmupDuration * 1_000_000_000))
-            if let endTime = self.echoCancellationWarmupEndTime, Date() >= endTime {
-                self.isEchoCancellationWarmingUp = false
-                self.log("Echo Cancellation warmup window completed.")
-            }
-        }
-    }
-
     func startContinuousListening() async {
         shouldKeepListening = true
         guard !isMicrophoneMuted, !isListeningContinuously else {
@@ -579,7 +526,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
         isListeningContinuously = true
         await vadProcessor?.resetSession()
-        triggerEchoCancellationWarmup()
         refreshStatusMessage()
         log("Started listening to WebRTC stream for VAD-segmented recording.")
     }
@@ -597,16 +543,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             prerollBuffers.removeAll()
             closeAudioFileIfNeeded()
             return
-        }
-        
-        if isEchoCancellationWarmingUp {
-            if let endTime = echoCancellationWarmupEndTime, Date() >= endTime {
-                isEchoCancellationWarmingUp = false
-                log("Echo Cancellation warmup window completed during audio feeding.")
-            } else {
-                prerollBuffers.removeAll()
-                return
-            }
         }
         
         // Feed mono channel data to VAD processor
@@ -1652,9 +1588,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         isPreparingPlayback = false
         isPlaybackAudible = false
         isSpeaking = false
-        if wasInterrupted {
-            playbackInterruptionToken = UUID()
-        }
 
         refreshStatusMessage()
     }
@@ -1674,7 +1607,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
 
         isMicrophoneMuted = false
-        triggerEchoCancellationWarmup()
         refreshStatusMessage()
     }
 
