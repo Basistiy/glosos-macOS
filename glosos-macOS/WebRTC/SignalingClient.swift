@@ -27,7 +27,7 @@ public actor SignalingClient {
     public weak var delegate: SignalingClientDelegate?
     
     private let apiEndpoint: String
-    private let token: String
+    private var token: String
     private var webSocketTask: URLSessionWebSocketTask?
     private var urlSession: URLSession?
     private var sessionDelegate: URLSessionWebSocketDelegate?
@@ -50,6 +50,10 @@ public actor SignalingClient {
     
     public func setDelegate(_ delegate: SignalingClientDelegate?) {
         self.delegate = delegate
+    }
+    
+    public func updateToken(_ newToken: String) {
+        self.token = newToken
     }
     
     public func connect() {

@@ -101,6 +101,26 @@ final class P2PConnectionController: ObservableObject {
             return
         }
 
+        // If signalingClient exists and apiEndpoint is unchanged (e.g. token refreshed):
+        if let client = signalingClient, lastSavedApiEndpoint == apiEndpoint {
+            print("[P2PConnectionController] Updating token on existing signaling client (preserving active WebRTC connection if any)...")
+            self.lastSavedToken = token
+            self.hasGivenUpReconnecting = false
+            
+            await client.updateToken(token)
+            
+            // Refresh TURN credentials in background
+            Task {
+                let servers = await fetchTurnCredentials(apiEndpoint: apiEndpoint, token: token)
+                self.turnServers = servers
+                print("[P2PConnectionController] Ephemeral TURN credentials updated: \(servers.count) servers found.")
+            }
+            
+            // Reconnect signaling with updated token without tearing down active WebRTC call
+            await client.connect()
+            return
+        }
+
         // Save credentials for network self-healing
         self.lastSavedApiEndpoint = apiEndpoint
         self.lastSavedToken = token
