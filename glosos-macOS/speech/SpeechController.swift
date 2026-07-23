@@ -190,6 +190,8 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
 
     @Published private(set) var personalVoiceAuthorizationStatus: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus = .notDetermined
     @Published private(set) var availablePersonalVoices: [AVSpeechSynthesisVoice] = []
+    @Published private(set) var isFirstAgentResponsePending = false
+    @Published private(set) var isSuppressingVADForInitialAgentResponse = false
 
     @Published var isWebRTCConnected = false {
         didSet {
@@ -205,6 +207,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 Task {
                     await vad?.resetSession()
                 }
+                clearInitialAgentResponseVADSuppression()
+            } else if !oldValue {
+                markFirstAgentResponsePending()
             }
         }
     }
@@ -587,7 +592,32 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
     }
 
+    func markFirstAgentResponsePending() {
+        isFirstAgentResponsePending = true
+        isSuppressingVADForInitialAgentResponse = false
+    }
+
+    func startFirstAgentResponseVADSuppressionIfNeeded() {
+        if isFirstAgentResponsePending {
+            isFirstAgentResponsePending = false
+            isSuppressingVADForInitialAgentResponse = true
+            log("First agent response started — suppressing Silero VAD detection during response.")
+        }
+    }
+
+    func clearInitialAgentResponseVADSuppression() {
+        if isSuppressingVADForInitialAgentResponse || isFirstAgentResponsePending {
+            log("Clearing first agent response VAD suppression.")
+            isSuppressingVADForInitialAgentResponse = false
+            isFirstAgentResponsePending = false
+        }
+    }
+
     func handleSpeechStarted() {
+        if isSuppressingVADForInitialAgentResponse {
+            log("Silero VAD detected speech start during first agent response — ignoring trigger to prevent echo interrupt.")
+            return
+        }
         guard !isRecordingUtterance else { return }
         isRecordingUtterance = true
         log("Speech started detected by VAD.")
@@ -684,6 +714,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func beginPlayback(with text: String) {
+        startFirstAgentResponseVADSuppressionIfNeeded()
         if let oldURL = currentPlayingFileURL {
             try? FileManager.default.removeItem(at: oldURL)
             currentPlayingFileURL = nil
@@ -1585,9 +1616,14 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 
     private func finishPlayback(wasInterrupted: Bool) {
+        let wasSpeaking = isSpeaking || isPreparingPlayback
         isPreparingPlayback = false
         isPlaybackAudible = false
         isSpeaking = false
+
+        if wasSpeaking, isSuppressingVADForInitialAgentResponse {
+            clearInitialAgentResponseVADSuppression()
+        }
 
         refreshStatusMessage()
     }

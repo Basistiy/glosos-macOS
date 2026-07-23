@@ -261,6 +261,33 @@ struct glosos_macOSTests {
 
     @Test
     @MainActor
+    func sileroVADIsSuppressedDuringInitialAgentResponse() async throws {
+        let controller = SpeechController()
+        
+        // Connecting WebRTC marks first response pending (VAD suppression not active right after connection)
+        controller.isWebRTCConnected = true
+        #expect(controller.isFirstAgentResponsePending == true)
+        #expect(controller.isSuppressingVADForInitialAgentResponse == false)
+        
+        // When first agent response starts, VAD suppression activates
+        controller.startFirstAgentResponseVADSuppressionIfNeeded()
+        #expect(controller.isFirstAgentResponsePending == false)
+        #expect(controller.isSuppressingVADForInitialAgentResponse == true)
+        
+        // Simulating speech detection during first agent response should be ignored
+        controller.handleSpeechStarted()
+        #expect(controller.liveTranscript == "")
+        
+        // Clearing suppression allows VAD speech detection to operate normally
+        controller.clearInitialAgentResponseVADSuppression()
+        #expect(controller.isSuppressingVADForInitialAgentResponse == false)
+        
+        controller.handleSpeechStarted()
+        #expect(controller.liveTranscript == "Listening...")
+    }
+
+    @Test
+    @MainActor
     func signalingClientAttemptsReconnectionOnFailure() async throws {
         let client = SignalingClient(apiEndpoint: "http://127.0.0.1:59999/api", token: "test-token")
         
