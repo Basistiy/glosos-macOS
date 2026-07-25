@@ -340,6 +340,8 @@ extension P2PConnectionController: SignalingClientDelegate {
                 }
             }
             cleanupCall()
+        } else {
+            webRTCManager.clearPendingIceCandidates()
         }
         
         self.currentCallerSocketId = callerSocketId

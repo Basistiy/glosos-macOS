@@ -386,7 +386,7 @@ public final class WebRTCManager: NSObject {
     }
     
     public func createPeerConnection(iceServers: [RTCIceServer] = []) -> Bool {
-        cleanup()
+        cleanup(clearPendingCandidates: false)
         
         let config = RTCConfiguration()
         var servers = [RTCIceServer(urlStrings: Self.stunServers)]
@@ -477,21 +477,21 @@ public final class WebRTCManager: NSObject {
     }
     
     public func addIceCandidate(_ candidate: RTCIceCandidate) {
-        guard let pc = peerConnection else {
-            print("[WebRTCManager] Cannot add ICE candidate: peerConnection is nil")
+        guard let pc = peerConnection, pc.remoteDescription != nil else {
+            print("[WebRTCManager] Queuing remote ICE candidate (peerConnection or remote description not set)")
+            pendingIceCandidates.append(candidate)
             return
         }
         
-        if pc.remoteDescription != nil {
-            pc.add(candidate) { error in
-                if let error = error {
-                    print("[WebRTCManager] Failed to add ICE candidate: \(error.localizedDescription)")
-                }
+        pc.add(candidate) { error in
+            if let error = error {
+                print("[WebRTCManager] Failed to add ICE candidate: \(error.localizedDescription)")
             }
-        } else {
-            print("[WebRTCManager] Queuing remote ICE candidate (remote description not set)")
-            pendingIceCandidates.append(candidate)
         }
+    }
+    
+    public func clearPendingIceCandidates() {
+        pendingIceCandidates.removeAll()
     }
     
     private func flushPendingIceCandidates() {
@@ -525,7 +525,7 @@ public final class WebRTCManager: NSObject {
         return channel.sendData(buffer)
     }
     
-    public func cleanup() {
+    public func cleanup(clearPendingCandidates: Bool = true) {
         print("[WebRTCManager] Cleaning up WebRTC resources...")
         if let channel = dataChannel {
             channel.close()
@@ -534,6 +534,9 @@ public final class WebRTCManager: NSObject {
         if let pc = peerConnection {
             pc.close()
             peerConnection = nil
+        }
+        if clearPendingCandidates {
+            pendingIceCandidates.removeAll()
         }
         audioState.clearAudioGraph()
     }
