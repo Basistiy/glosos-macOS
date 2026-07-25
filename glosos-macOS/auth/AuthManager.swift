@@ -64,6 +64,12 @@ public struct KeychainHelper: Sendable {
     }
 }
 
+public enum RefreshResult: Equatable, Sendable {
+    case success
+    case invalidToken
+    case networkError
+}
+
 @MainActor
 public final class AuthManager: ObservableObject {
     @Published public var user: AuthUser?
@@ -102,13 +108,16 @@ public final class AuthManager: ObservableObject {
             print("[AuthManager] Auth token expired or invalid. Attempting token refresh...")
             guard let self = self else { return }
             Task { @MainActor in
-                let success = await self.refreshAccessToken()
-                if !success {
-                    print("[AuthManager] Token refresh failed. Logging out...")
+                let result = await self.refreshAccessTokenDetailed()
+                switch result {
+                case .success:
+                    print("[AuthManager] Token refreshed successfully.")
+                case .invalidToken:
+                    print("[AuthManager] Refresh token is invalid or expired. Logging out...")
                     self.logout()
                     self.error = "Session expired. Please log in again."
-                } else {
-                    print("[AuthManager] Token refreshed successfully.")
+                case .networkError:
+                    print("[AuthManager] Network error during token refresh. Session preserved, will retry when network is restored.")
                 }
             }
         }
@@ -160,15 +169,15 @@ public final class AuthManager: ObservableObject {
     }
 
     @discardableResult
-    public func refreshAccessToken() async -> Bool {
+    public func refreshAccessTokenDetailed() async -> RefreshResult {
         guard let storedRefreshToken = KeychainHelper.get(account: Self.refreshTokenAccountKey) else {
             print("[AuthManager] No stored refresh token found.")
-            return false
+            return .invalidToken
         }
 
         guard var endpointUrl = URL(string: signalingAPIEndpoint) else {
             print("[AuthManager] Invalid API Endpoint URL for refresh")
-            return false
+            return .invalidToken
         }
 
         if #available(macOS 13.0, *) {
@@ -183,14 +192,14 @@ public final class AuthManager: ObservableObject {
 
         let body: [String: String] = ["refreshToken": storedRefreshToken]
         guard let httpBody = try? JSONSerialization.data(withJSONObject: body) else {
-            return false
+            return .invalidToken
         }
         request.httpBody = httpBody
 
         do {
             let (data, response) = try await urlSession.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
-                return false
+                return .networkError
             }
 
             if (200..<300).contains(httpResponse.statusCode) {
@@ -200,15 +209,24 @@ public final class AuthManager: ObservableObject {
                 KeychainHelper.save(token: refreshResponse.token, account: Self.tokenAccountKey)
 
                 self.token = refreshResponse.token
-                return true
+                return .success
+            } else if (400..<500).contains(httpResponse.statusCode) {
+                print("[AuthManager] Refresh token request rejected with status code \(httpResponse.statusCode)")
+                return .invalidToken
             } else {
-                print("[AuthManager] Refresh token request failed with status code \(httpResponse.statusCode)")
-                return false
+                print("[AuthManager] Refresh token request failed with server status code \(httpResponse.statusCode)")
+                return .networkError
             }
         } catch {
             print("[AuthManager] Network error during refresh: \(error.localizedDescription)")
-            return false
+            return .networkError
         }
+    }
+
+    @discardableResult
+    public func refreshAccessToken() async -> Bool {
+        let result = await refreshAccessTokenDetailed()
+        return result == .success
     }
 
     public func login(username: String, password: String) async -> Bool {

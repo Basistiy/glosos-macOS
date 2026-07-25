@@ -320,4 +320,70 @@ struct AuthManagerTests {
         #expect(manager.error == "Invalid Apple identity token")
         #expect(KeychainHelper.get(account: "current_user_token") == nil)
     }
+
+    @Test
+    @MainActor
+    func refreshAccessTokenNetworkErrorReturnsNetworkError() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+
+        // Set up stored refresh token
+        KeychainHelper.save(token: "valid-refresh-token", account: "current_user_refresh_token")
+
+        // Simulate network failure during refresh request
+        MockURLProtocol.requestHandler = { _ in
+            throw NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost, userInfo: [NSLocalizedDescriptionKey: "The network connection was lost."])
+        }
+
+        let result = await manager.refreshAccessTokenDetailed()
+
+        #expect(result == .networkError)
+
+        // Clean up
+        KeychainHelper.delete(account: "current_user_refresh_token")
+    }
+
+    @Test
+    @MainActor
+    func refreshAccessTokenInvalidTokenReturnsInvalidToken() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+
+        // Set up stored refresh token
+        KeychainHelper.save(token: "expired-refresh-token", account: "current_user_refresh_token")
+
+        let errorPayload = AuthErrorResponse(error: "Invalid refresh token")
+        let responseData = try JSONEncoder().encode(errorPayload)
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 401,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseData)
+        }
+
+        let result = await manager.refreshAccessTokenDetailed()
+
+        #expect(result == .invalidToken)
+
+        // Clean up
+        KeychainHelper.delete(account: "current_user_refresh_token")
+    }
 }
