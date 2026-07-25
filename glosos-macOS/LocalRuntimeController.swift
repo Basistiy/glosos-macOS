@@ -439,6 +439,7 @@ final class LocalRuntimeController: ObservableObject {
 
         let assets = try? await assetManager.existingAssets()
         await runtimeManager.stop(containerName: containerName, assets: assets)
+        killOrphanedVirtualizationProcesses()
 
         runtimeState = .stopped
         runtimeStatusDetail = "Managed container stopped."
@@ -553,6 +554,15 @@ final class LocalRuntimeController: ObservableObject {
         currentManagedEndpoint = nil
     }
 
+    private func killOrphanedVirtualizationProcesses() {
+        print("[LocalRuntimeController] Terminating orphaned Apple Virtualization processes...")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-9", "-f", "com.apple.Virtualization"]
+        try? task.run()
+        task.waitUntilExit()
+    }
+
     private func startManagedRuntimeWithRecovery(
         configuration: ManagedContainerConfiguration,
         assets: ContainerRuntimeAssets,
@@ -568,8 +578,10 @@ final class LocalRuntimeController: ObservableObject {
             )
         } catch {
             print("[LocalRuntimeController] Cached runtime filesystem start failed with error: \(error.localizedDescription)")
-            print("[LocalRuntimeController] Initiating recovery... Stopping current VM.")
+            print("[LocalRuntimeController] Initiating recovery... Stopping current VM and killing orphaned processes.")
             await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
+            killOrphanedVirtualizationProcesses()
+            try? await Task.sleep(for: .seconds(1))
             await updateStatus("Cached runtime filesystem failed. Rebuilding...")
             print("[LocalRuntimeController] Rebuilding container filesystem from scratch (reuseCachedFilesystem: false)...")
             return try await startManagedRuntime(
@@ -604,8 +616,9 @@ final class LocalRuntimeController: ObservableObject {
 
         guard isHealthy else {
             print("[LocalRuntimeController] Health check failed for endpoint \(endpoint.displayString).")
-            print("[LocalRuntimeController] Stopping container...")
+            print("[LocalRuntimeController] Stopping container and performing cleanup...")
             await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
+            killOrphanedVirtualizationProcesses()
             print("[LocalRuntimeController] Fetching recent logs...")
             let logs = await assetManager.recentLogs(
                 containerName: configuration.containerName,
