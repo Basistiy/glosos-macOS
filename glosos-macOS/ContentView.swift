@@ -53,17 +53,19 @@ struct ContentView: View {
                                 Image(systemName: "laptopcomputer.and.iphone")
                                     .font(.system(size: 48))
                                     .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
-                                Link(destination: URL(string: "https://glosos.com")!) {
-                                    Text("connect to your mac at glosos.com")
-                                        .font(.system(.body, design: .rounded).weight(.semibold))
-                                        .padding(.horizontal, 20)
-                                        .padding(.vertical, 12)
-                                        .background(Color(red: 0.18, green: 0.52, blue: 0.42))
-                                        .foregroundStyle(.white)
-                                        .cornerRadius(12)
-                                        .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
+                                if authManager.token != nil {
+                                    Link(destination: URL(string: "https://glosos.com")!) {
+                                        Text("connect to your mac at glosos.com")
+                                            .font(.system(.body, design: .rounded).weight(.semibold))
+                                            .padding(.horizontal, 20)
+                                            .padding(.vertical, 12)
+                                            .background(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                            .foregroundStyle(.white)
+                                            .cornerRadius(12)
+                                            .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
 
                                 if let localURL = URL(string: "http://127.0.0.1:\(p2pController.localServer.listeningPort)") {
                                     Link(destination: localURL) {
