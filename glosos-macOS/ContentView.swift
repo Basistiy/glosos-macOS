@@ -66,6 +66,25 @@ struct ContentView: View {
                                         .shadow(color: Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.2), radius: 6, x: 0, y: 3)
                                 }
                                 .buttonStyle(.plain)
+
+                                if let localURL = URL(string: "http://127.0.0.1:\(p2pController.localServer.listeningPort)") {
+                                    Link(destination: localURL) {
+                                        Text("Open local Web UI")
+                                            .font(.system(.body, design: .rounded).weight(.semibold))
+                                            .padding(.horizontal, 20)
+                                            .padding(.vertical, 12)
+                                            .background(Color.white.opacity(0.85))
+                                            .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                            .cornerRadius(12)
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 12)
+                                                    .stroke(Color(red: 0.18, green: 0.52, blue: 0.42).opacity(0.4), lineWidth: 1.5)
+                                            )
+                                            .shadow(color: Color.black.opacity(0.05), radius: 4, x: 0, y: 2)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
                                 Spacer()
                             }
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1096,30 +1115,15 @@ private struct SettingsView: View {
                     }
 
                     Section("Local WebRTC Server") {
-                        Toggle("Enable Embedded Local Server", isOn: Binding(
-                            get: { p2pController.localServer.isRunning },
-                            set: { newValue in
-                                if newValue {
-                                    p2pController.startLocalServer()
-                                } else {
-                                    p2pController.stopLocalServer()
-                                }
-                            }
-                        ))
-                        
-                        if p2pController.localServer.isRunning {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("Status: \(p2pController.localServer.statusMessage)")
-                                    .font(.system(.footnote, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                                
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Status: \(p2pController.localServer.statusMessage)")
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(.secondary)
+                            
+                            if p2pController.localServer.isRunning {
                                 Link("Open Local Web UI (http://127.0.0.1:\(p2pController.localServer.listeningPort))", destination: URL(string: "http://127.0.0.1:\(p2pController.localServer.listeningPort)")!)
                                     .font(.system(.footnote, design: .rounded))
                             }
-                        } else {
-                            Text("Start an embedded HTTP server directly inside glosos-macOS to accept WebRTC voice calls on localhost without glosos.com.")
-                                .font(.system(.footnote, design: .rounded))
-                                .foregroundStyle(.secondary)
                         }
                     }
 

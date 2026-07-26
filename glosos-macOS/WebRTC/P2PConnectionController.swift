@@ -45,6 +45,7 @@ final class P2PConnectionController: ObservableObject {
         self.webRTCManager = WebRTCManager()
         self.webRTCManager.delegate = self
         self.localServer.delegate = self
+        self.startLocalServer()
     }
     
     private func fetchTurnCredentials(apiEndpoint: String, token: String) async -> [RTCIceServer] {
