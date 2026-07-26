@@ -88,6 +88,7 @@ struct ContentView: View {
                             speechController: speechController,
                             agentController: agentController,
                             runtimeController: runtimeController,
+                            p2pController: p2pController,
                             autoSpeakAgentReplies: $autoSpeakAgentReplies,
                             preventSystemSleep: $preventSystemSleep,
                             playThinkingSound: $playThinkingSound,
@@ -228,6 +229,13 @@ struct ContentView: View {
                     agentController.disconnect()
                     Task {
                         await runtimeController.refreshStatus()
+                    }
+                }
+                .onChange(of: runtimeController.runtimeState) { _, newState in
+                    if newState == .running, runtimeController.isManagedMode, let endpoint = runtimeController.currentManagedEndpoint {
+                        Task {
+                            await agentController.connect(using: endpoint)
+                        }
                     }
                 }
                 .onChange(of: runtimeController.lastRuntimeError) { _, newValue in
@@ -742,6 +750,7 @@ private struct SettingsView: View {
     @ObservedObject var speechController: SpeechController
     @ObservedObject var agentController: AgentConnectionController
     @ObservedObject var runtimeController: LocalRuntimeController
+    @ObservedObject var p2pController: P2PConnectionController
     @Binding var autoSpeakAgentReplies: Bool
     @Binding var preventSystemSleep: Bool
     @Binding var playThinkingSound: Bool
@@ -1084,6 +1093,34 @@ private struct SettingsView: View {
                         Text("Keep the Mac awake while Glosos is running so background services remain active when you are away.")
                             .font(.system(.footnote, design: .rounded))
                             .foregroundStyle(.secondary)
+                    }
+
+                    Section("Local WebRTC Server") {
+                        Toggle("Enable Embedded Local Server", isOn: Binding(
+                            get: { p2pController.localServer.isRunning },
+                            set: { newValue in
+                                if newValue {
+                                    p2pController.startLocalServer()
+                                } else {
+                                    p2pController.stopLocalServer()
+                                }
+                            }
+                        ))
+                        
+                        if p2pController.localServer.isRunning {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Status: \(p2pController.localServer.statusMessage)")
+                                    .font(.system(.footnote, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                
+                                Link("Open Local Web UI (http://127.0.0.1:\(p2pController.localServer.listeningPort))", destination: URL(string: "http://127.0.0.1:\(p2pController.localServer.listeningPort)")!)
+                                    .font(.system(.footnote, design: .rounded))
+                            }
+                        } else {
+                            Text("Start an embedded HTTP server directly inside glosos-macOS to accept WebRTC voice calls on localhost without glosos.com.")
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Section("Speech") {

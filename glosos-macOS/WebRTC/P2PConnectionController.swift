@@ -24,6 +24,9 @@ final class P2PConnectionController: ObservableObject {
         }
     }
     
+    @Published private(set) var localServer = LocalSignalingServer()
+    @Published var isLocalServerEnabled = false
+    
     private var signalingClient: SignalingClient?
     private let webRTCManager: WebRTCManager
     private var turnServers: [RTCIceServer] = []
@@ -41,6 +44,7 @@ final class P2PConnectionController: ObservableObject {
     init() {
         self.webRTCManager = WebRTCManager()
         self.webRTCManager.delegate = self
+        self.localServer.delegate = self
     }
     
     private func fetchTurnCredentials(apiEndpoint: String, token: String) async -> [RTCIceServer] {
@@ -468,8 +472,10 @@ extension P2PConnectionController: WebRTCManagerDelegate {
         print("[P2PConnectionController] WebRTC connection state changed: \(state.rawValue)")
         switch state {
         case .connected, .completed:
-            // Handled when data channel opens as well
-            break
+            isConnected = true
+            let name = peerUsername ?? "Peer"
+            statusDetail = "Connected to \(name)"
+            appendSystemMessage("WebRTC connection established with \(name).", state: .final)
         case .disconnected:
             print("[P2PConnectionController] WebRTC connection disconnected. Waiting for recovery...")
             statusDetail = "Connection unstable"
@@ -517,3 +523,47 @@ extension P2PConnectionController: WebRTCManagerDelegate {
         }
     }
 }
+
+// MARK: - LocalSignalingServerDelegate
+
+extension P2PConnectionController: LocalSignalingServerDelegate {
+    func startLocalServer(port: UInt16 = 8080) {
+        isLocalServerEnabled = true
+        localServer.start(port: port)
+        statusDetail = "Local server: http://127.0.0.1:\(localServer.listeningPort)"
+    }
+
+    func stopLocalServer() {
+        isLocalServerEnabled = false
+        localServer.stop()
+        statusDetail = "Local server stopped"
+    }
+
+    public func localSignalingServer(_ server: LocalSignalingServer, didReceiveOffer sdp: String) async throws -> String {
+        webRTCManager.clearPendingIceCandidates()
+        self.peerUsername = "Local Browser Client"
+        self.isConnected = true
+        
+        let pcCreated = webRTCManager.createPeerConnection(iceServers: [])
+        guard pcCreated else {
+            throw NSError(domain: "P2PConnectionController", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to create WebRTC PeerConnection for local offer"])
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            webRTCManager.handleIncomingCall(offerSdp: sdp) { result in
+                switch result {
+                case .success(let localSdp):
+                    continuation.resume(returning: localSdp.sdp)
+                case .failure(let error):
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    public func localSignalingServer(_ server: LocalSignalingServer, didReceiveCandidate candidate: String, sdpMid: String?, sdpMLineIndex: Int32) async {
+        let rtcCandidate = RTCIceCandidate(sdp: candidate, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
+        webRTCManager.addIceCandidate(rtcCandidate)
+    }
+}
+
