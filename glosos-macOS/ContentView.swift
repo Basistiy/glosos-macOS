@@ -37,8 +37,6 @@ struct ContentView: View {
                 OnboardingView(runtimeController: runtimeController) {
                     isOnboardingCompleted = true
                 }
-            } else if authManager.token == nil {
-                AuthView(authManager: authManager)
             } else {
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
@@ -314,21 +312,65 @@ struct ContentView: View {
 
             Spacer()
 
-            if let user = authManager.user {
-                Label {
-                    Text(user.username)
-                        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+            if authManager.token == nil {
+                HStack(spacing: 10) {
+                    Text("Sign in to be able to connect to your mac remotely")
+                        .font(.system(.subheadline, design: .rounded))
+                        .foregroundStyle(Color(red: 0.14, green: 0.19, blue: 0.16).opacity(0.8))
                         .lineLimit(1)
-                } icon: {
-                    Circle()
-                        .fill(Color(red: 0.18, green: 0.52, blue: 0.42))
-                        .frame(width: 8, height: 8)
+
+                    if let authError = authManager.error {
+                        Text(authError)
+                            .font(.system(.caption, design: .rounded))
+                            .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
+                            .lineLimit(1)
+                    }
+
+                    Button {
+                        authManager.startAppleWebAuth()
+                    } label: {
+                        HStack(spacing: 6) {
+                            if authManager.isLoading {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "apple.logo")
+                                    .font(.system(size: 13, weight: .medium))
+                            }
+                            Text("Sign in")
+                                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(Color(red: 0.18, green: 0.52, blue: 0.42))
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(authManager.isLoading)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.leading, 14)
+                .padding(.trailing, 6)
+                .padding(.vertical, 5)
                 .background(.white.opacity(0.72))
                 .clipShape(Capsule())
-                .fixedSize(horizontal: true, vertical: false)
+            } else {
+                if let user = authManager.user {
+                    Label {
+                        Text(user.username)
+                            .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                            .lineLimit(1)
+                    } icon: {
+                        Circle()
+                            .fill(Color(red: 0.18, green: 0.52, blue: 0.42))
+                            .frame(width: 8, height: 8)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.white.opacity(0.72))
+                    .clipShape(Capsule())
+                    .fixedSize(horizontal: true, vertical: false)
+                }
             }
 
             Label {
@@ -395,17 +437,19 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
 
-            Button {
-                authManager.logout()
-            } label: {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 38, height: 38)
-                    .background(.white.opacity(0.78))
-                    .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
-                    .clipShape(Circle())
+            if authManager.token != nil {
+                Button {
+                    authManager.logout()
+                } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 38, height: 38)
+                        .background(.white.opacity(0.78))
+                        .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
