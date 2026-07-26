@@ -383,7 +383,7 @@ struct OnboardingView: View {
 
     private func startOnboardingSetup() {
         // Save the chosen model configurations
-        runtimeController.managedModelName = "gemini-3.1-flash-lite"
+        runtimeController.managedModelName = "gemini-3.5-flash-lite"
         runtimeController.managedModelProvider = .gemini
         runtimeController.runtimeMode = .managedAppleContainer
         runtimeController.saveSettings()
@@ -512,6 +512,7 @@ struct OnboardingView: View {
 
     private func appendLog(_ message: String) {
         logLines.append(message)
+        print("[Onboarding] \(message)")
     }
 
     private func parseStatusToStepIndex(_ status: String) -> Int? {

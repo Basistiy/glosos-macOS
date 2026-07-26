@@ -32,7 +32,7 @@ final class P2PConnectionController: ObservableObject {
     private var turnServers: [RTCIceServer] = []
     
     private var currentCallerSocketId: String?
-    private var peerUsername: String?
+    @Published public private(set) var peerUsername: String?
     
     private var pathMonitor: NWPathMonitor?
     private let pathMonitorQueue = DispatchQueue(label: "com.glosos.network-monitor")
@@ -291,7 +291,7 @@ final class P2PConnectionController: ObservableObject {
         peerUsername = nil
         
         if signalingClient != nil {
-            statusDetail = "Waiting for browser connection..."
+            statusDetail = "Browser"
         } else {
             statusDetail = "Disconnected"
         }
@@ -309,7 +309,7 @@ extension P2PConnectionController: SignalingClientDelegate {
             statusDetail = "Connected to \(name)"
             appendSystemMessage("Signaling connection restored.", state: .final)
         } else {
-            statusDetail = "Waiting for browser connection..."
+            statusDetail = "Browser"
             if messages.isEmpty {
                 appendSystemMessage("Ready! Log in to the web app on another device to call this client.", state: .final)
             }

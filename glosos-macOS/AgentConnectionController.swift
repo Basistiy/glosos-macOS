@@ -121,6 +121,10 @@ final class AgentConnectionController: ObservableObject {
             return "Agent is replying"
         }
 
+        if connectionStatus == "Connected" {
+            return "Container"
+        }
+
         return connectionStatus
     }
 

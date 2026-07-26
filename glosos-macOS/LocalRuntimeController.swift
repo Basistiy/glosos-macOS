@@ -87,11 +87,12 @@ struct ManagedContainerConfiguration: Equatable, Sendable {
             variables.append("GOOGLE_API_KEY=\(key)")
         case .custom:
             if let localLLMApiBase {
-                variables.append("OPENAI_BASE_URL=\(localLLMApiBase)")
-                variables.append("OPENAI_API_BASE=\(localLLMApiBase)")
+                variables.append("CUSTOM_LLM_BASE_URL=\(localLLMApiBase)")
+                variables.append("API_BASE_URL=\(localLLMApiBase)")
             }
             if let localLLMApiKey {
-                variables.append("OPENAI_API_KEY=\(localLLMApiKey)")
+                variables.append("CUSTOM_LLM_API_KEY=\(localLLMApiKey)")
+                variables.append("API_KEY=\(localLLMApiKey)")
             }
         case .cerebras:
             let key = (cerebrasAPIKey == nil || cerebrasAPIKey!.isEmpty) ? "placeholder_key" : cerebrasAPIKey!
@@ -253,7 +254,7 @@ final class LocalRuntimeController: ObservableObject {
             ?? "glosos-google-user-macos"
         self.managedModelName = userDefaults.string(forKey: Self.managedModelNameKey)
             ?? ProcessInfo.processInfo.environment["MODEL_NAME"]
-            ?? "gemini-2.5-flash"
+            ?? "gemini-3.5-flash-lite"
         self.managedGoogleAPIKey = userDefaults.string(forKey: Self.managedGoogleAPIKeyKey)
             ?? ProcessInfo.processInfo.environment["GOOGLE_API_KEY"]
             ?? ""
@@ -365,22 +366,26 @@ final class LocalRuntimeController: ObservableObject {
 
 
         guard let configuration = resolvedConfiguration else {
+            print("[LocalRuntimeController] Start failed: invalid configuration - \(invalidConfigurationMessage)")
             applyFailure(invalidConfigurationMessage)
             return false
         }
 
         runtimeState = .starting
         runtimeStatusDetail = "Preparing managed runtime..."
+        print("[LocalRuntimeController] Preparing managed runtime...")
 
         do {
             let assets = try await assetManager.prepareAssets { [weak self] status in
                 await MainActor.run {
+                    print("[LocalRuntimeController] Status: \(status)")
                     self?.runtimeStatusDetail = status
                 }
             }
 
             let updateStatus: @Sendable (String) async -> Void = { [weak self] status in
                 await MainActor.run {
+                    print("[LocalRuntimeController] Status: \(status)")
                     self?.runtimeStatusDetail = status
                 }
             }
@@ -494,12 +499,10 @@ final class LocalRuntimeController: ObservableObject {
         }
 
         switch managedModelProvider {
-        case .gemini:
-            guard !googleAPIKey.isEmpty else { return nil }
+        case .gemini, .cerebras:
+            break
         case .custom:
             guard !localLLMApiBase.isEmpty else { return nil }
-        case .cerebras:
-            guard !cerebrasAPIKey.isEmpty else { return nil }
         }
 
         return ManagedContainerConfiguration(
@@ -548,6 +551,7 @@ final class LocalRuntimeController: ObservableObject {
 
 
     private func applyFailure(_ message: String) {
+        print("[LocalRuntimeController] Error: \(message)")
         runtimeState = .failed
         runtimeStatusDetail = "Managed runtime failed."
         lastRuntimeError = message

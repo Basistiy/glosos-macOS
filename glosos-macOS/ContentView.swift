@@ -392,7 +392,7 @@ struct ContentView: View {
 
             if authManager.token != nil {
                 Label {
-                    Text(p2pController.isConnected ? "Peer connected" : p2pController.statusDetail)
+                    Text(p2pController.isConnected ? (p2pController.peerUsername != nil ? "Browser: \(p2pController.peerUsername!)" : "Browser") : p2pController.statusDetail)
                         .font(.system(.subheadline, design: .rounded))
                         .lineLimit(1)
                 } icon: {
@@ -1158,19 +1158,6 @@ private struct SettingsView: View {
                         Text("Keep the Mac awake while Glosos is running so background services remain active when you are away.")
                             .font(.system(.footnote, design: .rounded))
                             .foregroundStyle(.secondary)
-                    }
-
-                    Section("Local WebRTC Server") {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Status: \(p2pController.localServer.statusMessage)")
-                                .font(.system(.footnote, design: .rounded))
-                                .foregroundStyle(.secondary)
-                            
-                            if p2pController.localServer.isRunning {
-                                Link("Open Local Web UI (http://127.0.0.1:\(p2pController.localServer.listeningPort))", destination: URL(string: "http://127.0.0.1:\(p2pController.localServer.listeningPort)")!)
-                                    .font(.system(.footnote, design: .rounded))
-                            }
-                        }
                     }
 
                     Section("Speech") {
