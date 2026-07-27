@@ -541,7 +541,6 @@ extension P2PConnectionController: LocalSignalingServerDelegate {
     }
 
     public func localSignalingServer(_ server: LocalSignalingServer, didReceiveOffer sdp: String) async throws -> String {
-        webRTCManager.clearPendingIceCandidates()
         self.peerUsername = "Local Browser Client"
         self.isConnected = true
         

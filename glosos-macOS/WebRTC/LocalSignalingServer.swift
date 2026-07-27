@@ -101,17 +101,53 @@ public final class LocalSignalingServer: ObservableObject {
 
     private func handleNewConnection(_ connection: NWConnection) {
         connection.start(queue: queue)
-        receiveNextHTTPMessage(connection)
+        receiveFullHTTPRequest(connection: connection, accumulatedData: Data())
     }
 
-    private func receiveNextHTTPMessage(_ connection: NWConnection) {
+    private func receiveFullHTTPRequest(connection: NWConnection, accumulatedData: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
             guard let self = self else { return }
+
+            var buffer = accumulatedData
             if let data = content, !data.isEmpty {
-                Task { @MainActor in
-                    await self.processHTTPRequest(data: data, connection: connection)
+                buffer.append(data)
+            }
+
+            if isComplete || error != nil {
+                if buffer.isEmpty {
+                    connection.cancel()
+                    return
                 }
-            } else if isComplete || error != nil {
+            }
+
+            // Check if complete headers (\r\n\r\n) have arrived
+            if let headerEndRange = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                let headersData = buffer[..<headerEndRange.lowerBound]
+                let bodyData = buffer[headerEndRange.upperBound...]
+
+                if let headersString = String(data: headersData, encoding: .utf8) {
+                    var expectedContentLength = 0
+                    for line in headersString.components(separatedBy: "\r\n") {
+                        let lowerLine = line.lowercased()
+                        if lowerLine.hasPrefix("content-length:") {
+                            let valueString = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
+                            expectedContentLength = Int(valueString) ?? 0
+                        }
+                    }
+
+                    // Wait for the full body if more data is expected
+                    if bodyData.count < expectedContentLength && !isComplete && error == nil {
+                        self.receiveFullHTTPRequest(connection: connection, accumulatedData: buffer)
+                        return
+                    }
+                }
+
+                Task { @MainActor in
+                    await self.processHTTPRequest(data: buffer, connection: connection)
+                }
+            } else if !isComplete && error == nil {
+                self.receiveFullHTTPRequest(connection: connection, accumulatedData: buffer)
+            } else {
                 connection.cancel()
             }
         }
@@ -139,9 +175,8 @@ public final class LocalSignalingServer: ObservableObject {
         let path = components[1]
 
         var bodyData = Data()
-        if let doubleNewlineRange = requestString.range(of: "\r\n\r\n") {
-            let bodyString = String(requestString[doubleNewlineRange.upperBound...])
-            bodyData = Data(bodyString.utf8)
+        if let headerEndRange = data.range(of: Data("\r\n\r\n".utf8)) {
+            bodyData = data.subdata(in: headerEndRange.upperBound..<data.count)
         }
 
         if method == "OPTIONS" {
@@ -889,14 +924,19 @@ public final class LocalSignalingServer: ObservableObject {
                     candidatesCount = 0;
 
                     try {
-                        pc = new RTCPeerConnection({ iceServers: [] });
-
-                        // Handle local mic stream
+                        // Request microphone access FIRST so Safari grants origin permissions before RTCPeerConnection creation
+                        let stream = null;
                         try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                         } catch (err) {
                             console.warn('Microphone access not granted:', err);
+                        }
+
+                        pc = new RTCPeerConnection({ iceServers: [] });
+
+                        if (stream) {
+                            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+                        } else {
                             pc.addTransceiver('audio', { direction: 'recvonly' });
                         }
 
@@ -905,12 +945,13 @@ public final class LocalSignalingServer: ObservableObject {
                             const audioEl = document.getElementById('remoteAudio');
                             if (event.streams && event.streams[0]) {
                                 audioEl.srcObject = event.streams[0];
+                                audioEl.play().catch(e => console.warn('Audio autoplay prevented:', e));
                             }
                         };
 
                         // ICE Candidate handling
                         pc.onicecandidate = (event) => {
-                            if (event.candidate) {
+                            if (event.candidate && event.candidate.candidate) {
                                 candidatesCount++;
                                 updateDiagnostics();
                                 fetch('/api/webrtc/candidate', {
@@ -921,7 +962,7 @@ public final class LocalSignalingServer: ObservableObject {
                                         sdpMid: event.candidate.sdpMid,
                                         sdpMLineIndex: event.candidate.sdpMLineIndex
                                     })
-                                });
+                                }).catch(err => console.warn('Candidate send error:', err));
                             }
                         };
 
@@ -962,7 +1003,10 @@ public final class LocalSignalingServer: ObservableObject {
                             body: JSON.stringify({ sdp: offer.sdp })
                         });
 
-                        if (!res.ok) throw new Error('Offer request failed');
+                        if (!res.ok) {
+                            const errText = await res.text();
+                            throw new Error('Offer request failed: ' + res.status + ' ' + errText);
+                        }
                         const data = await res.json();
                         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
 
