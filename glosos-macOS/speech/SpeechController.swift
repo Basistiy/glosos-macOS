@@ -395,9 +395,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         let ttsSystem = TTSSystem(rawValue: ttsSystemRaw) ?? .apple
         self.selectedTTSSystem = ttsSystem
         
-        self.selectedQwenTTSVoice = userDefaults.string(forKey: Self.selectedQwenTTSVoiceKey) ?? "Ryan"
+        self.selectedQwenTTSVoice = userDefaults.string(forKey: Self.selectedQwenTTSVoiceKey) ?? "aiden"
         self.qwenTTSTemperature = userDefaults.object(forKey: Self.qwenTTSTemperatureKey) as? Double ?? 0.9
-        self.qwenTTSTopP = userDefaults.object(forKey: Self.qwenTTSTopPKey) as? Double ?? 0.55
+        self.qwenTTSTopP = userDefaults.object(forKey: Self.qwenTTSTopPKey) as? Double ?? 0.3
         self.qwenTTSRepetitionPenalty = userDefaults.object(forKey: Self.qwenTTSRepetitionPenaltyKey) as? Double ?? 1.1
         
         let startThreshold = userDefaults.object(forKey: Self.vadStartThresholdKey) as? Float ?? 0.60
