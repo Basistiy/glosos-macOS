@@ -282,9 +282,11 @@ public actor SignalingClient {
             // Post notification if it's an authentication error
             let lowercased = errorMsg.lowercased()
             if lowercased.contains("auth") || lowercased.contains("token") || lowercased.contains("expired") || lowercased.contains("invalid") {
-                print("[SignalingClient] Authentication error detected. Posting GlososAuthTokenExpired notification.")
-                Task { @MainActor in
-                    NotificationCenter.default.post(name: NSNotification.Name("GlososAuthTokenExpired"), object: nil)
+                if !self.isExplicitDisconnect {
+                    print("[SignalingClient] Authentication error detected. Posting GlososAuthTokenExpired notification.")
+                    Task { @MainActor in
+                        NotificationCenter.default.post(name: NSNotification.Name("GlososAuthTokenExpired"), object: nil)
+                    }
                 }
             }
             

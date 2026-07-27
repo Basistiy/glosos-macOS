@@ -137,6 +137,8 @@ public final class AuthManager: ObservableObject {
         }
     }
 
+    private var isRefreshingToken = false
+
     public func restoreSession() {
         // Load user from UserDefaults
         if let data = userDefaults.data(forKey: Self.currentUserInfoKey),
@@ -153,13 +155,19 @@ public final class AuthManager: ObservableObject {
 
         // Load token from Keychain
         if let storedToken = KeychainHelper.get(account: Self.tokenAccountKey) {
-            self.token = storedToken
-            
-            // Check if expired and refresh asynchronously
+            // Check if expired and refresh asynchronously before assigning self.token
             if isTokenExpired(storedToken) {
                 Task {
-                    _ = await refreshAccessToken()
+                    let result = await self.refreshAccessTokenDetailed()
+                    if result == .invalidToken {
+                        print("[AuthManager] Stored token expired and refresh failed. Logging out...")
+                        self.logout()
+                    } else if result == .networkError {
+                        self.token = storedToken
+                    }
                 }
+            } else {
+                self.token = storedToken
             }
         } else {
             // Clear both if token is missing
@@ -170,6 +178,13 @@ public final class AuthManager: ObservableObject {
 
     @discardableResult
     public func refreshAccessTokenDetailed() async -> RefreshResult {
+        guard !isRefreshingToken else {
+            print("[AuthManager] Token refresh already in progress. Skipping duplicate request.")
+            return .networkError
+        }
+        isRefreshingToken = true
+        defer { isRefreshingToken = false }
+
         guard let storedRefreshToken = KeychainHelper.get(account: Self.refreshTokenAccountKey) else {
             print("[AuthManager] No stored refresh token found.")
             return .invalidToken
