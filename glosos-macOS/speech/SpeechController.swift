@@ -1478,15 +1478,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let totalBytes = filesToDownload.reduce(0) { $0 + Int64($1.size ?? 0) }
                 print("[Qwen3 TTS] Found \(filesToDownload.count) files to download (Total size: \(totalBytes) bytes)")
                 
-                var lastLoggedPercent = -1
-                let aggregator = ProgressAggregator(totalBytes: totalBytes) { [weak self] completed, speed in
+                let aggregator = ProgressAggregator(totalBytes: totalBytes, reportStep: 10.0) { [weak self] completed, speed in
                     let fraction = totalBytes > 0 ? Double(completed) / Double(totalBytes) : 0.0
                     let percent = Int(fraction * 100)
-                    if percent != lastLoggedPercent && (percent % 25 == 0 || completed == totalBytes) {
-                        lastLoggedPercent = percent
-                        let speedMB = speed / (1024.0 * 1024.0)
-                        print("[Qwen3 TTS] Download progress: \(percent)% (\(String(format: "%.2f", speedMB)) MB/s)")
-                    }
+                    let speedMB = speed / (1024.0 * 1024.0)
+                    print("[Qwen3 TTS] Download progress: \(percent)% (\(String(format: "%.2f", speedMB)) MB/s)")
                     guard let self = self else { return }
                     Task { @MainActor in
                         self.qwenTTSState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
@@ -1774,10 +1770,12 @@ nonisolated final class ProgressAggregator: @unchecked Sendable {
     private var lastReportedPercent: Double = -1.0
     private var startTime: Date?
     let totalBytes: Int64
+    let reportStep: Double
     let onProgress: @Sendable (Int64, Double) -> Void
     
-    init(totalBytes: Int64, onProgress: @escaping @Sendable (Int64, Double) -> Void) {
+    init(totalBytes: Int64, reportStep: Double = 10.0, onProgress: @escaping @Sendable (Int64, Double) -> Void) {
         self.totalBytes = totalBytes
+        self.reportStep = reportStep
         self.onProgress = onProgress
     }
     
@@ -1790,7 +1788,7 @@ nonisolated final class ProgressAggregator: @unchecked Sendable {
         let totalCompleted = completedBytesByFile.values.reduce(0, +)
         let percent = totalBytes > 0 ? (Double(totalCompleted) / Double(totalBytes)) * 100.0 : 0.0
         
-        let shouldReport = (percent - lastReportedPercent >= 0.5) || (percent >= 100.0 && lastReportedPercent < 100.0)
+        let shouldReport = (percent - lastReportedPercent >= reportStep) || (percent >= 100.0 && lastReportedPercent < 100.0)
         if shouldReport {
             lastReportedPercent = percent
             let duration = Date().timeIntervalSince(startTime ?? Date())
