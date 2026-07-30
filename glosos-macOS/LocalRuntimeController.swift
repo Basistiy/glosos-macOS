@@ -364,6 +364,8 @@ final class LocalRuntimeController: ObservableObject {
         currentManagedEndpoint = nil
         detectedContainerVersion = nil
 
+        killOrphanedVirtualizationProcesses()
+
 
         guard let configuration = resolvedConfiguration else {
             print("[LocalRuntimeController] Start failed: invalid configuration - \(invalidConfigurationMessage)")
