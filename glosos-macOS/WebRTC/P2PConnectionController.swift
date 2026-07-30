@@ -40,6 +40,8 @@ final class P2PConnectionController: ObservableObject {
     private var lastSavedToken: String?
     private var wasOffline = false
     private var hasGivenUpReconnecting = false
+    private var lastLoggedPathStatus: NWPath.Status?
+    private var lastLoggedInterfaces: String?
     
     init() {
         self.webRTCManager = WebRTCManager()
@@ -200,7 +202,12 @@ final class P2PConnectionController: ObservableObject {
     
     private func handleNetworkPathUpdate(_ path: NWPath) {
         let isPathSatisfied = path.status == .satisfied
-        print("[P2PConnectionController] Network path status updated: \(path.status), interfaces: \(path.availableInterfaces)")
+        let interfacesString = path.availableInterfaces.description
+        if lastLoggedPathStatus != path.status || lastLoggedInterfaces != interfacesString {
+            lastLoggedPathStatus = path.status
+            lastLoggedInterfaces = interfacesString
+            print("[P2PConnectionController] Network path status updated: \(path.status), interfaces: \(path.availableInterfaces)")
+        }
         
         if !isPathSatisfied {
             self.wasOffline = true

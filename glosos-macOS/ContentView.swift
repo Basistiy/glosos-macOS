@@ -859,9 +859,9 @@ private struct SettingsView: View {
         }
     }
 
-    @State private var geminiModelSelection: String = ""
-    @State private var cerebrasModelSelection: String = ""
-    @State private var containerImageSelection: String = ""
+    @State private var geminiModelSelection: String = "gemini-3.5-flash"
+    @State private var cerebrasModelSelection: String = "gpt-oss-120b"
+    @State private var containerImageSelection: String = "docker.io/evbasistyi/glosos-google-user:latest"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1433,7 +1433,7 @@ private struct SettingsView: View {
                                             .foregroundStyle(.red)
                                     } else {
                                         Picker("Personal Voice", selection: Binding(
-                                            get: { speechController.selectedPersonalVoiceIdentifier },
+                                            get: { speechController.selectedPersonalVoiceIdentifier ?? speechController.availablePersonalVoices.first?.identifier },
                                             set: { newValue in
                                                 speechController.selectedPersonalVoiceIdentifier = newValue
                                             }

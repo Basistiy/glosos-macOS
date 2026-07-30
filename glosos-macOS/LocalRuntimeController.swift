@@ -108,6 +108,16 @@ protocol LocalRuntimeHealthChecking: Sendable {
 }
 
 final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
+    private let session: URLSession
+
+    init() {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2
+        config.timeoutIntervalForResource = 2
+        config.waitsForConnectivity = false
+        self.session = URLSession(configuration: config)
+    }
+
     func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
 
@@ -116,7 +126,7 @@ final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
                 return true
             }
 
-            try? await Task.sleep(for: .milliseconds(300))
+            try? await Task.sleep(for: .milliseconds(1200))
         }
 
         return false
@@ -127,7 +137,7 @@ final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
         request.timeoutInterval = 2
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 return false
             }

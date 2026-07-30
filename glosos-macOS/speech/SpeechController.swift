@@ -1478,17 +1478,22 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 let totalBytes = filesToDownload.reduce(0) { $0 + Int64($1.size ?? 0) }
                 print("[Qwen3 TTS] Found \(filesToDownload.count) files to download (Total size: \(totalBytes) bytes)")
                 
+                var lastLoggedPercent = -1
                 let aggregator = ProgressAggregator(totalBytes: totalBytes) { [weak self] completed, speed in
                     let fraction = totalBytes > 0 ? Double(completed) / Double(totalBytes) : 0.0
-                    let speedMB = speed / (1024.0 * 1024.0)
-                    print("[Qwen3 TTS] Download progress update: \(completed) / \(totalBytes) bytes (\(String(format: "%.1f", fraction * 100))%) - Speed: \(String(format: "%.2f", speedMB)) MB/s")
+                    let percent = Int(fraction * 100)
+                    if percent != lastLoggedPercent && (percent % 25 == 0 || completed == totalBytes) {
+                        lastLoggedPercent = percent
+                        let speedMB = speed / (1024.0 * 1024.0)
+                        print("[Qwen3 TTS] Download progress: \(percent)% (\(String(format: "%.2f", speedMB)) MB/s)")
+                    }
                     guard let self = self else { return }
                     Task { @MainActor in
                         self.qwenTTSState = .downloading(progress: fraction, completedBytes: completed, totalBytes: totalBytes)
                     }
                 }
                 
-                print("[Qwen3 TTS] Downloading files sequentially...")
+                var cachedCount = 0
                 for entry in filesToDownload {
                     let destination = modelDir.appendingPathComponent(entry.path)
                     let fileWeight = Int64(entry.size ?? 0)
@@ -1498,7 +1503,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                         if let attributes = try? FileManager.default.attributesOfItem(atPath: destination.path),
                            let size = attributes[.size] as? Int64 {
                             if size == fileWeight {
-                                print("[Qwen3 TTS] [File] Already cached: \(entry.path)")
+                                cachedCount += 1
                                 aggregator.update(file: entry.path, completed: fileWeight)
                                 continue
                             } else {
