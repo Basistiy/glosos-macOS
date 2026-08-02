@@ -762,10 +762,6 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 if playbackToken.isCancelled {
                     return
                 }
-
-                if let qwenModel = model as? Qwen3TTSModel {
-                    qwenModel.resetStreamingState()
-                }
                 
                 self.isPreparingPlayback = false
                 self.isPlaybackAudible = true

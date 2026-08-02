@@ -862,6 +862,7 @@ private struct SettingsView: View {
     @State private var geminiModelSelection: String = "gemini-3.5-flash"
     @State private var cerebrasModelSelection: String = "gpt-oss-120b"
     @State private var containerImageSelection: String = "docker.io/evbasistyi/glosos-google-user:latest"
+    @StateObject private var networkPermissionChecker = LocalNetworkPermissionChecker()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1090,6 +1091,47 @@ private struct SettingsView: View {
                             }
                             .buttonStyle(.bordered)
                             .disabled(runtimeController.runtimeState != .stopped)
+                        }
+                    }
+
+                    Section("Local Network & Permissions") {
+                        HStack {
+                            Text("Local Network Access")
+                            Spacer()
+                            if networkPermissionChecker.isLocalNetworkProhibited {
+                                Text("Prohibited by macOS")
+                                    .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
+                                    .font(.system(.body, design: .rounded).weight(.bold))
+                            } else {
+                                Text("Active / Normal")
+                                    .foregroundStyle(Color(red: 0.18, green: 0.52, blue: 0.42))
+                                    .font(.system(.body, design: .rounded).weight(.semibold))
+                            }
+                        }
+
+                        if networkPermissionChecker.isLocalNetworkProhibited {
+                            Text("macOS is currently restricting local network connections (192.168.64.x). Click 'Request Local Network Permission' to trigger the system prompt or open System Settings.")
+                                .font(.system(.footnote, design: .rounded))
+                                .foregroundStyle(Color(red: 0.70, green: 0.28, blue: 0.23))
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("Request Network Permission") {
+                                networkPermissionChecker.triggerLocalNetworkPrompt()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(networkPermissionChecker.isChecking)
+
+                            Button("Open macOS System Settings...") {
+                                networkPermissionChecker.openLocalNetworkPrivacySettings()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        if let message = networkPermissionChecker.lastProbeMessage {
+                            Text(message)
+                                .font(.system(.caption, design: .rounded))
+                                .foregroundStyle(.secondary)
                         }
                     }
 

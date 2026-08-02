@@ -108,16 +108,6 @@ protocol LocalRuntimeHealthChecking: Sendable {
 }
 
 final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
-    private let session: URLSession
-
-    init() {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 2
-        config.timeoutIntervalForResource = 2
-        config.waitsForConnectivity = false
-        self.session = URLSession(configuration: config)
-    }
-
     func waitUntilHealthy(endpoint: ManagedRuntimeEndpoint, timeoutSeconds: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSeconds)
 
@@ -126,7 +116,7 @@ final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
                 return true
             }
 
-            try? await Task.sleep(for: .milliseconds(1200))
+            try? await Task.sleep(for: .milliseconds(800))
         }
 
         return false
@@ -135,6 +125,13 @@ final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
     private func isHealthy(endpoint: ManagedRuntimeEndpoint) async -> Bool {
         var request = URLRequest(url: endpoint.agentEndpoint.healthURL)
         request.timeoutInterval = 2
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2
+        config.timeoutIntervalForResource = 2
+        config.waitsForConnectivity = false
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
 
         do {
             let (_, response) = try await session.data(for: request)
@@ -236,7 +233,7 @@ final class LocalRuntimeController: ObservableObject {
     private static let agentEndpointURLKey = "agentEndpointURL"
     private static let legacyManualRuntimeMode = "manualWebSocket"
     private static let defaultManualEndpointURL = AgentEndpoint.defaultLocalBaseURLString
-    private static let runtimeHealthTimeoutSeconds: TimeInterval = 20
+    private static let runtimeHealthTimeoutSeconds: TimeInterval = 60
 
     init(
         userDefaults: UserDefaults = .standard,
