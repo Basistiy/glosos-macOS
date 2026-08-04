@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "1EF1C5EC2FD0B8610011923D"
-               BuildableName = "glosos-macOS.app"
+               BuildableName = "glosos-macOS-release.app"
                ReferencedContainer = "container:glosos-macOS.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -57,7 +57,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1EF1C5EC2FD0B8610011923D"
-            BuildableName = "glosos-macOS.app"
+            BuildableName = "glosos-macOS-release.app"
             ReferencedContainer = "container:glosos-macOS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -73,7 +73,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1EF1C5EC2FD0B8610011923D"
-            BuildableName = "glosos-macOS.app"
+            BuildableName = "glosos-macOS-release.app"
             ReferencedContainer = "container:glosos-macOS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

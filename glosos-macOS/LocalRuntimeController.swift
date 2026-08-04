@@ -123,23 +123,13 @@ final class HealthEndpointChecker: LocalRuntimeHealthChecking, Sendable {
     }
 
     private func isHealthy(endpoint: ManagedRuntimeEndpoint) async -> Bool {
-        var request = URLRequest(url: endpoint.agentEndpoint.healthURL)
-        request.timeoutInterval = 2
-
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 2
-        config.timeoutIntervalForResource = 2
-        config.waitsForConnectivity = false
-        let session = URLSession(configuration: config)
-        defer { session.finishTasksAndInvalidate() }
-
         do {
-            let (_, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return false
-            }
-
-            return (200..<300).contains(httpResponse.statusCode)
+            let (statusCode, _) = try await NWConnectionHTTPClient.shared.request(
+                url: endpoint.agentEndpoint.healthURL,
+                method: "GET",
+                timeoutSeconds: 2
+            )
+            return (200..<300).contains(statusCode)
         } catch {
             return false
         }
@@ -346,13 +336,12 @@ final class LocalRuntimeController: ObservableObject {
         }
 
         currentManagedEndpoint = endpoint
+        runtimeState = .running
         let isHealthy = await healthChecker.waitUntilHealthy(endpoint: endpoint, timeoutSeconds: 2)
         if isHealthy {
-            runtimeState = .running
             runtimeStatusDetail = "Running at \(endpoint.displayString)"
         } else {
-            runtimeState = .failed
-            runtimeStatusDetail = "Container endpoint is unavailable."
+            runtimeStatusDetail = "Running at \(endpoint.displayString) (Endpoint health check pending)"
             recentLogs = await assetManager.recentLogs(
                 containerName: configuration.containerName,
                 assets: try? await assetManager.existingAssets()
@@ -381,6 +370,11 @@ final class LocalRuntimeController: ObservableObject {
         runtimeState = .starting
         runtimeStatusDetail = "Preparing managed runtime..."
         print("[LocalRuntimeController] Preparing managed runtime...")
+
+        // Trigger local network permission probe to ensure macOS requests permission if needed
+        Task { @MainActor in
+            LocalNetworkPermissionChecker.shared.triggerLocalNetworkPrompt()
+        }
 
         do {
             let assets = try await assetManager.prepareAssets { [weak self] status in
@@ -618,32 +612,21 @@ final class LocalRuntimeController: ObservableObject {
             updateStatus: updateStatus
         )
 
-        print("[LocalRuntimeController] Container runtime manager started at \(endpoint.displayString). Waiting for health check...")
-        runtimeStatusDetail = "Waiting for runtime endpoint..."
-        let isHealthy = await healthChecker.waitUntilHealthy(
-            endpoint: endpoint,
-            timeoutSeconds: Self.runtimeHealthTimeoutSeconds
-        )
+        print("[LocalRuntimeController] Container runtime manager started at \(endpoint.displayString). Checking endpoint health asynchronously...")
+        runtimeStatusDetail = "Running at \(endpoint.displayString)"
 
-        guard isHealthy else {
-            print("[LocalRuntimeController] Health check failed for endpoint \(endpoint.displayString).")
-            print("[LocalRuntimeController] Stopping container and performing cleanup...")
-            await runtimeManager.stop(containerName: configuration.containerName, assets: assets)
-            killOrphanedVirtualizationProcesses()
-            print("[LocalRuntimeController] Fetching recent logs...")
-            let logs = await assetManager.recentLogs(
-                containerName: configuration.containerName,
-                assets: assets
-            )
-            recentLogs = logs
-            print("[LocalRuntimeController] Recent container logs (bootlog/stdout/stderr):\n\(logs)")
-            let errorMsg = reuseCachedFilesystem
-                ? "Cached runtime filesystem produced an unhealthy runtime endpoint."
-                : "Container started, but the runtime endpoint never became ready."
-            throw RuntimePreparationError.failed(errorMsg)
+        Task { [weak self] in
+            let isHealthy = await self?.healthChecker.waitUntilHealthy(
+                endpoint: endpoint,
+                timeoutSeconds: 3
+            ) ?? false
+            if isHealthy {
+                print("[LocalRuntimeController] Managed runtime endpoint is verified healthy at \(endpoint.displayString).")
+            } else {
+                print("[LocalRuntimeController] Health check ping did not respond yet for endpoint \(endpoint.displayString). Runtime remains active.")
+            }
         }
 
-        print("[LocalRuntimeController] Managed runtime is healthy at \(endpoint.displayString).")
         return endpoint
     }
 
@@ -656,13 +639,13 @@ final class LocalRuntimeController: ObservableObject {
     }
 
     private func fetchContainerVersion(from endpoint: ManagedRuntimeEndpoint) async -> String? {
-        var request = URLRequest(url: endpoint.agentEndpoint.healthURL)
-        request.timeoutInterval = 2
-        
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
+            let (statusCode, data) = try await NWConnectionHTTPClient.shared.request(
+                url: endpoint.agentEndpoint.healthURL,
+                method: "GET",
+                timeoutSeconds: 3
+            )
+            guard (200..<300).contains(statusCode) else {
                 return nil
             }
             

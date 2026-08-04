@@ -12,6 +12,8 @@ import AppKit
 
 @MainActor
 final class LocalNetworkPermissionChecker: ObservableObject {
+    static let shared = LocalNetworkPermissionChecker()
+
     @Published var isLocalNetworkProhibited: Bool = false
     @Published var isChecking: Bool = false
     @Published var lastProbeMessage: String? = nil
@@ -19,6 +21,7 @@ final class LocalNetworkPermissionChecker: ObservableObject {
     private var pathMonitor: NWPathMonitor?
     private var tcpConnection: NWConnection?
     private var udpConnection: NWConnection?
+    private var browser: NWBrowser?
 
     init() {
         startMonitoring()
@@ -26,6 +29,7 @@ final class LocalNetworkPermissionChecker: ObservableObject {
 
     func startMonitoring() {
         checkLocalNetworkAccess()
+        triggerBrowserProbe()
     }
 
     func checkLocalNetworkAccess() {
@@ -39,14 +43,10 @@ final class LocalNetworkPermissionChecker: ObservableObject {
 
         conn.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
-                let prohibited: Bool
                 if #available(macOS 15.0, *) {
-                    prohibited = (path.unsatisfiedReason == .localNetworkDenied)
-                } else {
-                    prohibited = (path.status == .unsatisfied)
-                }
-                if prohibited {
-                    self?.isLocalNetworkProhibited = true
+                    if path.unsatisfiedReason == .localNetworkDenied {
+                        self?.isLocalNetworkProhibited = true
+                    }
                 }
             }
         }
@@ -80,7 +80,7 @@ final class LocalNetworkPermissionChecker: ObservableObject {
     }
 
     /// Triggers macOS to display the system "Allow Local Network Access" prompt
-    /// by initiating local TCP & UDP network connections (mDNS & local subnet probe).
+    /// by initiating local TCP & UDP network connections and a Bonjour NWBrowser search.
     func triggerLocalNetworkPrompt() {
         isChecking = true
         lastProbeMessage = "Triggering local network probe..."
@@ -88,6 +88,7 @@ final class LocalNetworkPermissionChecker: ObservableObject {
 
         checkLocalNetworkAccess()
         triggerUDPProbe()
+        triggerBrowserProbe()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             self?.isChecking = false
@@ -117,6 +118,33 @@ final class LocalNetworkPermissionChecker: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             udpConn.cancel()
             self?.udpConnection = nil
+        }
+    }
+
+    private func triggerBrowserProbe() {
+        let descriptor = NWBrowser.Descriptor.bonjour(type: "_http._tcp", domain: "local.")
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+
+        let browser = NWBrowser(for: descriptor, using: params)
+        self.browser = browser
+
+        browser.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                print("[LocalNetworkPermissionChecker] Browser probe state: \(state)")
+                if case .failed(let error) = state {
+                    if case .posix(let code) = error, code == .EACCES || code == .EPERM {
+                        self?.isLocalNetworkProhibited = true
+                    }
+                }
+            }
+        }
+
+        browser.start(queue: DispatchQueue(label: "com.glosos.browserprobe"))
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            browser.cancel()
+            self?.browser = nil
         }
     }
 

@@ -5,13 +5,13 @@ set -e
 
 # --- Configuration ---
 PROJECT_NAME="glosos-macOS"
-SCHEME_NAME="glosos-macOS"
+SCHEME_NAME="glosos-macOS-release"
 CONFIGURATION="Release"
 BUILD_DIR="./build"
 ARCHIVE_PATH="${BUILD_DIR}/${PROJECT_NAME}.xcarchive"
 EXPORT_PATH="${BUILD_DIR}/ExportedApp"
-APP_NAME="glosos-macOS.app"
-DMG_NAME="glosos-macOS.dmg"
+APP_NAME="glosos-macOS-release.app"
+DMG_NAME="glosos-macOS-release.dmg"
 DMG_PATH="${BUILD_DIR}/${DMG_NAME}"
 EXPORT_PLIST="${BUILD_DIR}/ExportOptions.plist"
 

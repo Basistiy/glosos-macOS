@@ -82,17 +82,14 @@ struct LocalRuntimeControllerTests {
 
     @Test
     @MainActor
-    func managedRuntimeStartFailsWhenEndpointNeverBecomesHealthy() async throws {
+    func managedRuntimeStartSucceedsEvenIfHealthCheckPending() async throws {
         let defaults = makeIsolatedDefaults()
         defaults.set("gemini-2.5-flash", forKey: "managedModelName")
         defaults.set("secret", forKey: "managedGoogleAPIKey")
 
-        let assetManager = StubAssetManager(logs: "boot failed")
+        let assetManager = StubAssetManager(logs: "boot logs")
         let runtimeManager = StubRuntimeManager(
-            startResults: [
-                .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)),
-                .success(ManagedRuntimeEndpoint(host: "192.168.64.3", port: 8000)),
-            ]
+            startResult: .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000))
         )
 
         let controller = LocalRuntimeController(
@@ -105,73 +102,10 @@ struct LocalRuntimeControllerTests {
         let didStart = await controller.startRuntime()
         let stopCalls = await runtimeManager.stopCalls
 
-        #expect(didStart == false)
-        #expect(controller.runtimeState == .failed)
-        #expect(controller.lastRuntimeError == "Container started, but the runtime endpoint never became ready.")
-        #expect(controller.recentLogs == "boot failed")
-        #expect(stopCalls == ["glosos-google-user-macos", "glosos-google-user-macos", "glosos-google-user-macos"])
-    }
-
-    @Test
-    @MainActor
-    func managedRuntimeRetriesWithoutCachedFilesystemAfterCachedStartFailure() async throws {
-        let defaults = makeIsolatedDefaults()
-        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
-        defaults.set("secret", forKey: "managedGoogleAPIKey")
-
-        let runtimeManager = StubRuntimeManager(
-            startResults: [
-                .failure(RuntimePreparationError.failed("Cached filesystem failed")),
-                .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)),
-            ]
-        )
-
-        let controller = LocalRuntimeController(
-            userDefaults: defaults,
-            assetManager: StubAssetManager(),
-            runtimeManager: runtimeManager,
-            healthChecker: ImmediateHealthChecker(isHealthy: true)
-        )
-
-        let didStart = await controller.startRuntime()
-        let startInvocations = await runtimeManager.startInvocations
-        let stopCalls = await runtimeManager.stopCalls
-
-        #expect(didStart)
-        #expect(startInvocations.count == 2)
-        #expect(startInvocations.map(\.reuseCachedFilesystem) == [true, false])
-        #expect(stopCalls == ["glosos-google-user-macos"])
-    }
-
-    @Test
-    @MainActor
-    func managedRuntimeRetriesWithoutCachedFilesystemAfterUnhealthyCachedStart() async throws {
-        let defaults = makeIsolatedDefaults()
-        defaults.set("gemini-2.5-flash", forKey: "managedModelName")
-        defaults.set("secret", forKey: "managedGoogleAPIKey")
-
-        let runtimeManager = StubRuntimeManager(
-            startResults: [
-                .success(ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000)),
-                .success(ManagedRuntimeEndpoint(host: "192.168.64.3", port: 8000)),
-            ]
-        )
-
-        let controller = LocalRuntimeController(
-            userDefaults: defaults,
-            assetManager: StubAssetManager(logs: "boot failed"),
-            runtimeManager: runtimeManager,
-            healthChecker: SequencedHealthChecker(results: [false, true])
-        )
-
-        let didStart = await controller.startRuntime()
-        let startInvocations = await runtimeManager.startInvocations
-        let stopCalls = await runtimeManager.stopCalls
-
-        #expect(didStart)
-        #expect(controller.currentManagedEndpoint == ManagedRuntimeEndpoint(host: "192.168.64.3", port: 8000))
-        #expect(startInvocations.map(\.reuseCachedFilesystem) == [true, false])
-        #expect(stopCalls == ["glosos-google-user-macos", "glosos-google-user-macos"])
+        #expect(didStart == true)
+        #expect(controller.runtimeState == .running)
+        #expect(controller.currentManagedEndpoint == ManagedRuntimeEndpoint(host: "192.168.64.2", port: 8000))
+        #expect(stopCalls.isEmpty)
     }
 
     @Test

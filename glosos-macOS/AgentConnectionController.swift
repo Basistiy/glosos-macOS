@@ -19,18 +19,19 @@ protocol AgentTransport: Sendable {
 }
 
 struct HTTPStreamingAgentTransport: AgentTransport {
-    private let session: URLSession
-
-    init(session: URLSession = .shared) {
-        self.session = session
-    }
-
     func connect(to endpoint: AgentEndpoint) async throws {
-        var request = URLRequest(url: endpoint.healthURL)
-        request.timeoutInterval = 5
-
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response, fallbackMessage: "Health check failed.")
+        let (statusCode, _) = try await NWConnectionHTTPClient.shared.request(
+            url: endpoint.healthURL,
+            method: "GET",
+            timeoutSeconds: 5
+        )
+        guard (200..<300).contains(statusCode) else {
+            throw AgentConnectionError.httpFailure(
+                statusCode: statusCode,
+                message: HTTPURLResponse.localizedString(forStatusCode: statusCode),
+                fallback: "Health check failed."
+            )
+        }
     }
 
     func disconnect() {}
@@ -40,29 +41,32 @@ struct HTTPStreamingAgentTransport: AgentTransport {
         to endpoint: AgentEndpoint,
         onEvent: @escaping @Sendable (AgentEvent) async -> Void
     ) async throws {
-        var request = URLRequest(url: endpoint.messageURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(payload)
-
-        let (bytes, response) = try await session.bytes(for: request)
-        try validate(
-            response: response,
-            fallbackMessage: "The agent request failed before streaming started."
-        )
-
-        for try await line in bytes.lines {
+        let bodyData = try JSONEncoder().encode(payload)
+        try await NWConnectionHTTPClient.shared.streamRequest(
+            url: endpoint.messageURL,
+            method: "POST",
+            headers: ["Content-Type": "application/json"],
+            body: bodyData
+        ) { line in
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
-                continue
+                return
             }
 
             guard let event = try? JSONDecoder().decode(AgentEvent.self, from: Data(trimmed.utf8)) else {
-                throw AgentConnectionError.invalidResponsePayload
+                return
             }
 
             await onEvent(event)
         }
+    }
+
+    private func makeRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.allowsExpensiveNetworkAccess = true
+        request.allowsConstrainedNetworkAccess = true
+        request.allowsCellularAccess = true
+        return request
     }
 
     private func validate(response: URLResponse, fallbackMessage: String) throws {

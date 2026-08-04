@@ -37,8 +37,7 @@ struct OnboardingView: View {
         OnboardingStep(id: 5, title: "Prepare init filesystem", status: .pending),
         OnboardingStep(id: 6, title: "Fetch Glosos runtime image", status: .pending),
         OnboardingStep(id: 7, title: "Create container runtime filesystem", status: .pending),
-        OnboardingStep(id: 8, title: "Start local Glosos container", status: .pending),
-        OnboardingStep(id: 9, title: "Verify container endpoint health", status: .pending)
+        OnboardingStep(id: 8, title: "Start local Glosos container", status: .pending)
     ]
 
     @State private var activeStepIndex = 0
@@ -481,17 +480,9 @@ struct OnboardingView: View {
 
     private func completeOnboarding() {
         let now = Date()
-        // Complete verify health
-        if activeStepIndex == 9 {
-            steps[9].status = .completed
-            steps[9].duration = now.timeIntervalSince(stepStartTime ?? now)
-            steps[9].detailText = nil
-        } else {
-            // Auto complete remaining steps if container just ran successfully
-            for idx in activeStepIndex..<steps.count {
-                steps[idx].status = .completed
-                steps[idx].duration = 0.05
-            }
+        for idx in activeStepIndex..<steps.count {
+            steps[idx].status = .completed
+            steps[idx].duration = 0.05
         }
         activeStepIndex = steps.count - 1
         appendLog("Onboarding setup sequence completed successfully.")
@@ -525,7 +516,6 @@ struct OnboardingView: View {
         if status.contains("Pulling runtime image") || status.contains("Using cached runtime image") { return 6 }
         if status.contains("Creating runtime filesystem") || status.contains("Using cached runtime filesystem") { return 7 }
         if status.contains("Starting container") { return 8 }
-        if status.contains("Waiting for runtime endpoint") || status.contains("health") { return 9 }
         return nil
     }
 }
