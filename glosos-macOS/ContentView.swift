@@ -161,6 +161,14 @@ struct ContentView: View {
                         return
                     }
                     
+                    // Ignore internal JSON payloads (transcriptions, agent responses) sent over data channel
+                    if let data = newValue.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let type = json["type"] as? String,
+                       type == "transcription" || type == "agent" {
+                        return
+                    }
+                    
                     let text = parseTextFromMessage(newValue).trimmingCharacters(in: .whitespacesAndNewlines)
                     let lowercasedText = text.lowercased()
                     
