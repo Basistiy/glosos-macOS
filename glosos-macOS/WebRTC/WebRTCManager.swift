@@ -320,6 +320,10 @@ public final class WebRTCManager: NSObject {
     private var dataChannel: RTCDataChannel?
     private var pendingIceCandidates: [RTCIceCandidate] = []
     
+    public var iceConnectionState: RTCIceConnectionState {
+        return peerConnection?.iceConnectionState ?? .closed
+    }
+    
     private let audioState = WebRTCAudioState()
     
     public var onIncomingAudioBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)? {

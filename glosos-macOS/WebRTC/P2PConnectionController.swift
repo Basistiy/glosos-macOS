@@ -526,8 +526,13 @@ extension P2PConnectionController: WebRTCManagerDelegate {
             statusDetail = "Connected to \(name)"
             appendSystemMessage("Secure end-to-end data channel established with \(name).", state: .final)
         } else {
-            print("[P2PConnectionController] Data channel closed. Ending session.")
-            cleanupCall()
+            let currentState = manager.iceConnectionState
+            if currentState == .failed || currentState == .closed {
+                print("[P2PConnectionController] Data channel closed & ICE state is terminal (\(currentState.rawValue)). Ending session.")
+                cleanupCall()
+            } else {
+                print("[P2PConnectionController] Data channel closed while ICE state is \(currentState.rawValue). Waiting for ICE recovery...")
+            }
         }
     }
 }
