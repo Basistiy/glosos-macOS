@@ -124,6 +124,18 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
             let box = ContinuationBox(continuation)
             let queue = DispatchQueue(label: "com.glosos.nwhttp.\(UUID().uuidString)")
 
+            connection.pathUpdateHandler = { path in
+                if #available(macOS 15.0, *) {
+                    if path.unsatisfiedReason == .localNetworkDenied {
+                        print("[NWConnectionHTTPClient] macOS Local Network permission denied for target: \(host):\(portInt)")
+                        box.resume(
+                            with: .failure(NWHTTPError.connectionFailed("Local network permission denied by macOS (localNetworkDenied)")),
+                            connection: connection
+                        )
+                    }
+                }
+            }
+
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
@@ -144,6 +156,7 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
 
                     connection.send(content: reqData, completion: .contentProcessed { error in
                         if let error {
+                            print("[NWConnectionHTTPClient] Send error to \(host):\(portInt): \(error.localizedDescription)")
                             box.resume(with: .failure(NWHTTPError.connectionFailed(error.localizedDescription)), connection: connection)
                             return
                         }
@@ -152,7 +165,20 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
                         Self.readAllData(connection: connection, buffer: buffer, box: box)
                     })
 
+                case .waiting(let error):
+                    print("[NWConnectionHTTPClient] Connection to \(host):\(portInt) is waiting: \(error.localizedDescription)")
+                    if case .posix(let code) = error {
+                        if code == .EACCES || code == .EPERM {
+                            print("[NWConnectionHTTPClient] Permission Denied (POSIX \(code.rawValue)) for target \(host):\(portInt)")
+                            box.resume(
+                                with: .failure(NWHTTPError.connectionFailed("Local network permission denied (POSIX \(code.rawValue): \(error.localizedDescription))")),
+                                connection: connection
+                            )
+                        }
+                    }
+
                 case .failed(let error):
+                    print("[NWConnectionHTTPClient] Connection to \(host):\(portInt) failed: \(error.localizedDescription)")
                     box.resume(with: .failure(NWHTTPError.connectionFailed(error.localizedDescription)), connection: connection)
                 default:
                     break
@@ -160,7 +186,9 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
             }
 
             queue.asyncAfter(deadline: .now() + timeoutSeconds) {
-                box.resume(with: .failure(NWHTTPError.connectionFailed("Request timed out")), connection: connection)
+                let stateDesc = String(describing: connection.state)
+                print("[NWConnectionHTTPClient] Request to \(url) timed out after \(Int(timeoutSeconds))s (connection state: \(stateDesc))")
+                box.resume(with: .failure(NWHTTPError.connectionFailed("Request timed out after \(Int(timeoutSeconds))s (state: \(stateDesc))")), connection: connection)
             }
 
             connection.start(queue: queue)
@@ -228,6 +256,18 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
             let box = ContinuationBox(continuation)
             let queue = DispatchQueue(label: "com.glosos.nwhttpstream.\(UUID().uuidString)")
 
+            connection.pathUpdateHandler = { path in
+                if #available(macOS 15.0, *) {
+                    if path.unsatisfiedReason == .localNetworkDenied {
+                        print("[NWConnectionHTTPClient] Stream: macOS Local Network permission denied for target: \(host):\(portInt)")
+                        box.resume(
+                            with: .failure(NWHTTPError.connectionFailed("Local network permission denied by macOS (localNetworkDenied)")),
+                            connection: connection
+                        )
+                    }
+                }
+            }
+
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
@@ -248,6 +288,7 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
 
                     connection.send(content: reqData, completion: .contentProcessed { error in
                         if let error {
+                            print("[NWConnectionHTTPClient] Stream send error to \(host):\(portInt): \(error.localizedDescription)")
                             box.resume(with: .failure(NWHTTPError.connectionFailed(error.localizedDescription)), connection: connection)
                             return
                         }
@@ -256,7 +297,20 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
                         Self.readStreamData(connection: connection, streamBuffer: streamBuffer, box: box, onLine: onLine)
                     })
 
+                case .waiting(let error):
+                    print("[NWConnectionHTTPClient] Stream connection to \(host):\(portInt) is waiting: \(error.localizedDescription)")
+                    if case .posix(let code) = error {
+                        if code == .EACCES || code == .EPERM {
+                            print("[NWConnectionHTTPClient] Stream: Permission Denied (POSIX \(code.rawValue)) for target \(host):\(portInt)")
+                            box.resume(
+                                with: .failure(NWHTTPError.connectionFailed("Local network permission denied (POSIX \(code.rawValue): \(error.localizedDescription))")),
+                                connection: connection
+                            )
+                        }
+                    }
+
                 case .failed(let error):
+                    print("[NWConnectionHTTPClient] Stream connection to \(host):\(portInt) failed: \(error.localizedDescription)")
                     box.resume(with: .failure(NWHTTPError.connectionFailed(error.localizedDescription)), connection: connection)
                 default:
                     break

@@ -32,50 +32,52 @@ final class LocalNetworkPermissionChecker: ObservableObject {
         triggerBrowserProbe()
     }
 
-    func checkLocalNetworkAccess() {
-        let host = NWEndpoint.Host("192.168.64.1")
-        let port = NWEndpoint.Port(rawValue: 8000)!
-        let params = NWParameters.tcp
-        params.includePeerToPeer = true
+    func checkLocalNetworkAccess(targetHosts: [String] = ["192.168.64.1", "192.168.65.1", "192.168.65.2"]) {
+        for hostStr in targetHosts {
+            let host = NWEndpoint.Host(hostStr)
+            let port = NWEndpoint.Port(rawValue: 8000)!
+            let params = NWParameters.tcp
+            params.includePeerToPeer = true
 
-        let conn = NWConnection(host: host, port: port, using: params)
-        self.tcpConnection = conn
+            let conn = NWConnection(host: host, port: port, using: params)
+            self.tcpConnection = conn
 
-        conn.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor in
-                if #available(macOS 15.0, *) {
-                    if path.unsatisfiedReason == .localNetworkDenied {
-                        self?.isLocalNetworkProhibited = true
-                    }
-                }
-            }
-        }
-
-        conn.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in
-                switch state {
-                case .waiting(let error):
-                    if case .posix(let code) = error {
-                        if code == .EACCES || code == .EPERM {
+            conn.pathUpdateHandler = { [weak self] path in
+                Task { @MainActor in
+                    if #available(macOS 15.0, *) {
+                        if path.unsatisfiedReason == .localNetworkDenied {
                             self?.isLocalNetworkProhibited = true
                         }
                     }
-                case .failed(let error):
-                    if case .posix(let code) = error, code == .EACCES || code == .EPERM {
-                        self?.isLocalNetworkProhibited = true
-                    }
-                default:
-                    break
                 }
             }
-        }
 
-        let queue = DispatchQueue(label: "com.glosos.networkmonitor")
-        conn.start(queue: queue)
+            conn.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor in
+                    switch state {
+                    case .waiting(let error):
+                        if case .posix(let code) = error {
+                            if code == .EACCES || code == .EPERM {
+                                self?.isLocalNetworkProhibited = true
+                            }
+                        }
+                    case .failed(let error):
+                        if case .posix(let code) = error, code == .EACCES || code == .EPERM {
+                            self?.isLocalNetworkProhibited = true
+                        }
+                    default:
+                        break
+                    }
+                }
+            }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            conn.cancel()
-            self?.tcpConnection = nil
+            let queue = DispatchQueue(label: "com.glosos.networkmonitor.\(hostStr)")
+            conn.start(queue: queue)
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                conn.cancel()
+                self?.tcpConnection = nil
+            }
         }
     }
 
