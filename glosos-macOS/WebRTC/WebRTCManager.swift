@@ -295,8 +295,15 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         lock.unlock()
     }
     
-    func clearAudioGraph() {
+    func clearAudioGraph(engine: AVAudioEngine? = nil) {
         lock.lock()
+        let player = _playerNode
+        let micMixer = _micMixerNode
+        let mainMixer = _mainMixerNode
+        let outputMixer = _outputMixer
+        let inputNode = _physicalInputNode
+        let targetEngine = engine ?? _audioEngine
+        
         _playerNode = nil
         _micMixerNode = nil
         _mainMixerNode = nil
@@ -307,7 +314,23 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         _audioEngine = nil
         _activeBuffersCount = 0
         _onPlaybackFinished = nil
+        _streamBuffersCount = 0
+        _streamCompletion = nil
+        _streamFinishedSending = false
         lock.unlock()
+        
+        inputNode?.removeTap(onBus: 0)
+        
+        if let player = player, player.isPlaying {
+            player.stop()
+        }
+        
+        if let eng = targetEngine {
+            if let player = player { eng.detach(player) }
+            if let micMixer = micMixer { eng.detach(micMixer) }
+            if let mainMixer = mainMixer { eng.detach(mainMixer) }
+            if let outputMixer = outputMixer { eng.detach(outputMixer) }
+        }
     }
 }
 
@@ -827,16 +850,19 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
     
     nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didStopEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule didStopEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
+        audioState.clearAudioGraph(engine: engine)
         return 0
     }
     
     nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didDisableEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule didDisableEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
+        audioState.clearAudioGraph(engine: engine)
         return 0
     }
     
     nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, willReleaseEngine engine: AVAudioEngine) -> Int {
         print("[WebRTCManager] audioDeviceModule willReleaseEngine called.")
+        audioState.clearAudioGraph(engine: engine)
         return 0
     }
     
