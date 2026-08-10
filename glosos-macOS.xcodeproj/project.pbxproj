@@ -45,7 +45,7 @@
 
 /* Begin PBXFileReference section */
 		1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:EHV7XZLAHA:Stream.io Inc"; lastKnownFileType = wrapper.xcframework; name = WebRTC.xcframework; path = Frameworks/WebRTC.xcframework; sourceTree = "<group>"; };
-		1EF1C5ED2FD0B8610011923D /* glosos-macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "glosos-macOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		1EF1C5ED2FD0B8610011923D /* Glosos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Glosos.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1EF1C5FA2FD0B8620011923D /* glosos-macOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "glosos-macOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -110,7 +110,7 @@
 		1EF1C5EE2FD0B8610011923D /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				1EF1C5ED2FD0B8610011923D /* glosos-macOS.app */,
+				1EF1C5ED2FD0B8610011923D /* Glosos.app */,
 				1EF1C5FA2FD0B8620011923D /* glosos-macOSTests.xctest */,
 			);
 			name = Products;
@@ -146,8 +146,8 @@
 				F0A1B2C32FD6000000000014 /* MLXAudioSTT */,
 				F0A1B2C32FD6000000000015 /* MLXAudioTTS */,
 			);
-			productName = "glosos-macOS";
-			productReference = 1EF1C5ED2FD0B8610011923D /* glosos-macOS.app */;
+			productName = Glosos;
+			productReference = 1EF1C5ED2FD0B8610011923D /* Glosos.app */;
 			productType = "com.apple.product-type.application";
 		};
 		1EF1C5F92FD0B8620011923D /* glosos-macOSTests */ = {
@@ -405,6 +405,7 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Glosos;
+				INFOPLIST_KEY_CFBundleName = Glosos;
 				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLSchemes =     (\n        glosos\n    );\n}";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSAppTransportSecurity = "{\n    NSAllowsArbitraryLoads = YES;\n    NSAllowsLocalNetworking = YES;\n}";
@@ -420,7 +421,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.3.8;
 				PRODUCT_BUNDLE_IDENTIFIER = com.glosos.glososmacos;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Glosos;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -454,8 +455,9 @@
 					"$(PROJECT_DIR)/Frameworks/WebRTC.xcframework/macos-arm64_x86_64",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "glosos-macOS-release";
-				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLSchemes =     (\n        \"glosos-release\"\n    );\n}";
+				INFOPLIST_KEY_CFBundleDisplayName = Glosos;
+				INFOPLIST_KEY_CFBundleName = Glosos;
+				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLSchemes =     (\n        glosos\n    );\n}";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSAppTransportSecurity = "{\n    NSAllowsArbitraryLoads = YES;\n    NSAllowsLocalNetworking = YES;\n}";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -469,8 +471,8 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.3.8;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.glosos.glososmacos-release";
-				PRODUCT_NAME = "glosos-macOS-release";
+				PRODUCT_BUNDLE_IDENTIFIER = com.glosos.glososmacos;
+				PRODUCT_NAME = Glosos;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -499,7 +501,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/glosos-macOS.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/glosos-macOS";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Glosos.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Glosos";
 			};
 			name = Debug;
 		};
@@ -520,7 +522,7 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/glosos-macOS-release.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/glosos-macOS-release";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Glosos.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Glosos";
 			};
 			name = Release;
 		};
