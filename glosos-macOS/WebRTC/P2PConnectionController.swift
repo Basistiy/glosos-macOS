@@ -455,9 +455,9 @@ extension P2PConnectionController: SignalingClientDelegate {
     public func signalingClient(_ client: SignalingClient, willAttemptReconnect attempt: Int, delay: TimeInterval) {
         guard client === self.signalingClient else { return }
         print("[P2PConnectionController] Signaling reconnect attempt \(attempt) in \(delay) seconds...")
-        statusDetail = "Reconnecting (attempt \(attempt)/5)..."
+        statusDetail = "Reconnecting (attempt \(attempt)/10)..."
         if isConnected || currentCallerSocketId != nil {
-            appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/5)...", state: .final)
+            appendSystemMessage("Connection lost. Reconnecting in \(Int(delay))s (attempt \(attempt)/10)...", state: .final)
         }
     }
     

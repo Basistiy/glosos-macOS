@@ -35,7 +35,8 @@ public actor SignalingClient {
     
     private var isExplicitDisconnect = false
     private var reconnectAttempts = 0
-    private let maxReconnectAttempts = 5
+    private let maxReconnectAttempts = 10
+    private let reconnectDelays: [TimeInterval] = [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 60.0, 60.0, 60.0, 60.0]
     private var reconnectTask: Task<Void, Never>?
     
     private var lastHeartbeatTime = Date()
@@ -386,7 +387,8 @@ public actor SignalingClient {
         // Schedule reconnect if this was an implicit disconnect
         if !isExplicitDisconnect {
             reconnectAttempts += 1
-            let delay = min(30.0, pow(2.0, Double(min(5, reconnectAttempts))))
+            let delayIndex = min(max(0, reconnectAttempts - 1), reconnectDelays.count - 1)
+            let delay = reconnectDelays[delayIndex]
             
             if reconnectAttempts <= maxReconnectAttempts {
                 print("[SignalingClient] Connection lost. Scheduling reconnect attempt \(reconnectAttempts)/\(maxReconnectAttempts) in \(delay) seconds...")
