@@ -24,6 +24,7 @@ struct ContentView: View {
     @AppStorage("thinkingSoundName") private var thinkingSoundName = "Funk"
     @AppStorage("isOnboardingCompleted") private var isOnboardingCompleted = false
     @State private var isShowingSettings = false
+    @State private var isShowingAuthSheet = false
     @State private var initialConfiguration: ManagedContainerConfiguration? = nil
     @State private var enteredAPIKey: String = ""
     @State private var hasInitialized = false
@@ -297,6 +298,9 @@ struct ContentView: View {
             }
         }
         .onChange(of: authManager.token) { _, newToken in
+            if newToken != nil {
+                isShowingAuthSheet = false
+            }
             Task {
                 if let newToken = newToken {
                     await p2pController.startSignaling(apiEndpoint: authManager.signalingAPIEndpoint, token: newToken)
@@ -305,6 +309,11 @@ struct ContentView: View {
                     p2pController.clearMessages()
                 }
             }
+        }
+        .sheet(isPresented: $isShowingAuthSheet) {
+            AuthView(authManager: authManager, onDismiss: {
+                isShowingAuthSheet = false
+            })
         }
     }
 
@@ -337,17 +346,17 @@ struct ContentView: View {
                     }
 
                     Button {
-                        authManager.startAppleWebAuth()
+                        isShowingAuthSheet = true
                     } label: {
                         HStack(spacing: 6) {
                             if authManager.isLoading {
                                 ProgressView()
                                     .controlSize(.small)
                             } else {
-                                Image(systemName: "apple.logo")
+                                Image(systemName: "person.crop.circle")
                                     .font(.system(size: 13, weight: .medium))
                             }
-                            Text("Sign in")
+                            Text("Log in")
                                 .font(.system(.subheadline, design: .rounded).weight(.semibold))
                         }
                         .padding(.horizontal, 14)

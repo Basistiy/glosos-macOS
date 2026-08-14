@@ -11,56 +11,22 @@ import Security
 import AppKit
 import AuthenticationServices
 
-
 /// A helper class to securely store the JWT token in the macOS Keychain.
 public struct KeychainHelper: Sendable {
-    static let service = "com.glosos.auth-token"
+    private static let store = KeychainTokenStore()
 
     @discardableResult
     public static func save(token: String, account: String) -> Bool {
-        let data = Data(token.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data
-        ]
-
-        // Delete any existing item first to prevent conflicts
-        SecItemDelete(query as CFDictionary)
-
-        let status = SecItemAdd(query as CFDictionary, nil)
-        return status == errSecSuccess
+        store.save(token: token, account: account)
     }
 
     public static func get(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var dataTypeRef: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
-
-        if status == errSecSuccess, let data = dataTypeRef as? Data {
-            return String(data: data, encoding: .utf8)
-        }
-        return nil
+        store.get(account: account)
     }
 
     @discardableResult
     public static func delete(account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-
-        let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess
+        store.delete(account: account)
     }
 }
 
@@ -81,6 +47,7 @@ public final class AuthManager: ObservableObject {
 
     private let userDefaults: UserDefaults
     private let urlSession: URLSession
+    private let tokenStore: TokenStoring
     
     private static let signalingAPIEndpointKey = "signalingAPIEndpoint"
     private static let currentUserInfoKey = "currentUserInfo"
@@ -90,15 +57,23 @@ public final class AuthManager: ObservableObject {
     nonisolated(unsafe) private var tokenExpiredObserver: Any?
     private let presentationContextProvider = PresentationContextProvider()
 
-    public init(userDefaults: UserDefaults = .standard, urlSession: URLSession = .shared) {
+    public init(
+        userDefaults: UserDefaults = .standard,
+        urlSession: URLSession = .shared,
+        tokenStore: TokenStoring = KeychainTokenStore(),
+        autoRestoreSession: Bool = true
+    ) {
         self.userDefaults = userDefaults
         self.urlSession = urlSession
+        self.tokenStore = tokenStore
 
         // Load signaling endpoint, default to https://glosos.com/api
         self.signalingAPIEndpoint = userDefaults.string(forKey: Self.signalingAPIEndpointKey)
             ?? "https://glosos.com/api"
 
-        restoreSession()
+        if autoRestoreSession {
+            restoreSession()
+        }
 
         self.tokenExpiredObserver = NotificationCenter.default.addObserver(
             forName: NSNotification.Name("GlososAuthTokenExpired"),
@@ -146,15 +121,15 @@ public final class AuthManager: ObservableObject {
             self.user = decodedUser
         }
 
-        // Load refresh token from Keychain
-        if let storedRefreshToken = KeychainHelper.get(account: Self.refreshTokenAccountKey) {
+        // Load refresh token from Token Store
+        if let storedRefreshToken = tokenStore.get(account: Self.refreshTokenAccountKey) {
             self.refreshToken = storedRefreshToken
         } else {
             self.refreshToken = nil
         }
 
-        // Load token from Keychain
-        if let storedToken = KeychainHelper.get(account: Self.tokenAccountKey) {
+        // Load token from Token Store
+        if let storedToken = tokenStore.get(account: Self.tokenAccountKey) {
             // Check if expired and refresh asynchronously before assigning self.token
             if isTokenExpired(storedToken) {
                 Task {
@@ -176,6 +151,16 @@ public final class AuthManager: ObservableObject {
         }
     }
 
+    private func makeURL(path: String) -> URL? {
+        guard let base = URL(string: signalingAPIEndpoint) else { return nil }
+        let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        if #available(macOS 13.0, *) {
+            return base.appending(path: cleanPath)
+        } else {
+            return base.appendingPathComponent(cleanPath)
+        }
+    }
+
     @discardableResult
     public func refreshAccessTokenDetailed() async -> RefreshResult {
         guard !isRefreshingToken else {
@@ -185,20 +170,14 @@ public final class AuthManager: ObservableObject {
         isRefreshingToken = true
         defer { isRefreshingToken = false }
 
-        guard let storedRefreshToken = KeychainHelper.get(account: Self.refreshTokenAccountKey) else {
+        guard let storedRefreshToken = tokenStore.get(account: Self.refreshTokenAccountKey) else {
             print("[AuthManager] No stored refresh token found.")
             return .invalidToken
         }
 
-        guard var endpointUrl = URL(string: signalingAPIEndpoint) else {
+        guard let endpointUrl = makeURL(path: "auth/refresh") else {
             print("[AuthManager] Invalid API Endpoint URL for refresh")
             return .invalidToken
-        }
-
-        if #available(macOS 13.0, *) {
-            endpointUrl = endpointUrl.appending(path: "/auth/refresh")
-        } else {
-            endpointUrl = endpointUrl.appendingPathComponent("/auth/refresh")
         }
 
         var request = URLRequest(url: endpointUrl)
@@ -220,8 +199,8 @@ public final class AuthManager: ObservableObject {
             if (200..<300).contains(httpResponse.statusCode) {
                 let refreshResponse = try JSONDecoder().decode(RefreshResponse.self, from: data)
 
-                // Save new access token to Keychain
-                KeychainHelper.save(token: refreshResponse.token, account: Self.tokenAccountKey)
+                // Save new access token
+                tokenStore.save(token: refreshResponse.token, account: Self.tokenAccountKey)
 
                 self.token = refreshResponse.token
                 return .success
@@ -244,21 +223,206 @@ public final class AuthManager: ObservableObject {
         return result == .success
     }
 
+    // MARK: - Email Log In
+
+    @discardableResult
+    public func loginWithEmail(identifier: String, password: String) async -> LoginResult {
+        isLoading = true
+        error = nil
+
+        let trimmedIdentifier = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedIdentifier.isEmpty || password.isEmpty {
+            let msg = "Email/username and password are required"
+            self.error = msg
+            self.isLoading = false
+            return .failure(msg)
+        }
+
+        guard let endpointUrl = makeURL(path: "auth/login") else {
+            let msg = "Invalid API Endpoint URL"
+            self.error = msg
+            self.isLoading = false
+            return .failure(msg)
+        }
+
+        var request = URLRequest(url: endpointUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let requestBody = EmailLoginRequest(login: trimmedIdentifier, password: password)
+        guard let httpBody = try? JSONEncoder().encode(requestBody) else {
+            let msg = "Failed to encode request parameters"
+            self.error = msg
+            self.isLoading = false
+            return .failure(msg)
+        }
+        request.httpBody = httpBody
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                let msg = "Invalid server response"
+                self.error = msg
+                self.isLoading = false
+                return .failure(msg)
+            }
+
+            if (200..<300).contains(httpResponse.statusCode) {
+                let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+                self.persistSession(authResponse: authResponse)
+                self.isLoading = false
+                return .success
+            } else if httpResponse.statusCode == 403 {
+                // Check if email verification is required
+                if let errorResponse = try? JSONDecoder().decode(AuthErrorResponse.self, from: data),
+                   errorResponse.requiresVerification == true {
+                    let targetEmail = errorResponse.email ?? trimmedIdentifier
+                    self.isLoading = false
+                    return .requiresVerification(email: targetEmail)
+                }
+
+                let errorMsg = self.parseErrorMessage(from: data, fallback: "Email verification required")
+                self.error = errorMsg
+                self.isLoading = false
+                return .failure(errorMsg)
+            } else {
+                let errorMsg = self.parseErrorMessage(from: data, fallback: "Login failed with status code \(httpResponse.statusCode)")
+                self.error = errorMsg
+                self.isLoading = false
+                return .failure(errorMsg)
+            }
+        } catch {
+            let msg = "Network error: \(error.localizedDescription)"
+            self.error = msg
+            self.isLoading = false
+            return .failure(msg)
+        }
+    }
+
+    // MARK: - Email Verification (OTP)
+
+    @discardableResult
+    public func verifyEmailOTP(email: String, otp: String) async -> Bool {
+        isLoading = true
+        error = nil
+
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedOtp = otp.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedEmail.isEmpty, !trimmedOtp.isEmpty else {
+            self.error = "Email and 6-digit verification code are required"
+            self.isLoading = false
+            return false
+        }
+
+        guard let endpointUrl = makeURL(path: "auth/verify-email") else {
+            self.error = "Invalid API Endpoint URL"
+            self.isLoading = false
+            return false
+        }
+
+        var request = URLRequest(url: endpointUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let requestBody = VerifyEmailRequest(email: trimmedEmail, otp: trimmedOtp)
+        guard let httpBody = try? JSONEncoder().encode(requestBody) else {
+            self.error = "Failed to encode verification request"
+            self.isLoading = false
+            return false
+        }
+        request.httpBody = httpBody
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                self.error = "Invalid server response"
+                self.isLoading = false
+                return false
+            }
+
+            if (200..<300).contains(httpResponse.statusCode) {
+                let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+                self.persistSession(authResponse: authResponse)
+                self.isLoading = false
+                return true
+            } else {
+                let errorMsg = self.parseErrorMessage(from: data, fallback: "Verification failed")
+                self.error = errorMsg
+                self.isLoading = false
+                return false
+            }
+        } catch {
+            self.error = "Network error: \(error.localizedDescription)"
+            self.isLoading = false
+            return false
+        }
+    }
+
+    @discardableResult
+    public func resendOTP(email: String) async -> (success: Bool, message: String) {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedEmail.isEmpty else {
+            return (false, "Email address is required")
+        }
+
+        guard let endpointUrl = makeURL(path: "auth/resend-otp") else {
+            return (false, "Invalid API Endpoint URL")
+        }
+
+        var request = URLRequest(url: endpointUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let requestBody = ResendOTPRequest(email: trimmedEmail)
+        guard let httpBody = try? JSONEncoder().encode(requestBody) else {
+            return (false, "Failed to encode resend request")
+        }
+        request.httpBody = httpBody
+
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return (false, "Invalid server response")
+            }
+
+            if (200..<300).contains(httpResponse.statusCode) {
+                let msg = (try? JSONDecoder().decode(GenericMessageResponse.self, from: data))?.message
+                    ?? "Verification code resent successfully. Please check your email."
+                return (true, msg)
+            } else {
+                let errorMsg = self.parseErrorMessage(from: data, fallback: "Failed to resend code")
+                return (false, errorMsg)
+            }
+        } catch {
+            return (false, "Network error: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Legacy / Username Login Forwarding
+
     public func login(username: String, password: String) async -> Bool {
+        let result = await loginWithEmail(identifier: username, password: password)
+        switch result {
+        case .success:
+            return true
+        case .requiresVerification:
+            self.error = "Email verification required"
+            return false
+        case .failure:
+            return false
+        }
+    }
+
+    public func register(username: String, password: String) async -> Bool {
         await performAuthRequest(
-            path: "/auth/login",
+            path: "auth/register",
             username: username,
             password: password
         )
     }
 
-    public func register(username: String, password: String) async -> Bool {
-        await performAuthRequest(
-            path: "/auth/register",
-            username: username,
-            password: password
-        )
-    }
+    // MARK: - Apple Authentication
 
     public func loginWithApple(
         identityToken: String,
@@ -271,16 +435,10 @@ public final class AuthManager: ObservableObject {
         isLoading = true
         error = nil
 
-        guard var endpointUrl = URL(string: signalingAPIEndpoint) else {
+        guard let endpointUrl = makeURL(path: "auth/apple") else {
             self.error = "Invalid API Endpoint URL"
             self.isLoading = false
             return false
-        }
-        
-        if #available(macOS 13.0, *) {
-            endpointUrl = endpointUrl.appending(path: "/auth/apple")
-        } else {
-            endpointUrl = endpointUrl.appendingPathComponent("/auth/apple")
         }
 
         var request = URLRequest(url: endpointUrl)
@@ -314,29 +472,12 @@ public final class AuthManager: ObservableObject {
 
             if (200..<300).contains(httpResponse.statusCode) {
                 let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
-
-                // Save user to UserDefaults
-                if let userData = try? JSONEncoder().encode(authResponse.user) {
-                    userDefaults.set(userData, forKey: Self.currentUserInfoKey)
-                }
-
-                // Save token to Keychain
-                KeychainHelper.save(token: authResponse.token, account: Self.tokenAccountKey)
-                if let rToken = authResponse.refreshToken {
-                    KeychainHelper.save(token: rToken, account: Self.refreshTokenAccountKey)
-                    self.refreshToken = rToken
-                }
-
-                self.user = authResponse.user
-                self.token = authResponse.token
+                self.persistSession(authResponse: authResponse)
                 self.isLoading = false
                 return true
             } else {
-                if let errorResponse = try? JSONDecoder().decode(AuthErrorResponse.self, from: data) {
-                    self.error = errorResponse.error
-                } else {
-                    self.error = "Request failed with status code \(httpResponse.statusCode)"
-                }
+                let errorMsg = self.parseErrorMessage(from: data, fallback: "Request failed with status code \(httpResponse.statusCode)")
+                self.error = errorMsg
                 self.isLoading = false
                 return false
             }
@@ -349,14 +490,8 @@ public final class AuthManager: ObservableObject {
 
     public func logout() {
         // Send logout request to backend in the background to revoke the refresh token
-        if let storedRefreshToken = KeychainHelper.get(account: Self.refreshTokenAccountKey),
-           var endpointUrl = URL(string: signalingAPIEndpoint) {
-            if #available(macOS 13.0, *) {
-                endpointUrl = endpointUrl.appending(path: "/auth/logout")
-            } else {
-                endpointUrl = endpointUrl.appendingPathComponent("/auth/logout")
-            }
-            
+        if let storedRefreshToken = tokenStore.get(account: Self.refreshTokenAccountKey),
+           let endpointUrl = makeURL(path: "auth/logout") {
             var request = URLRequest(url: endpointUrl)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -377,8 +512,8 @@ public final class AuthManager: ObservableObject {
         self.refreshToken = nil
         self.error = nil
         userDefaults.removeObject(forKey: Self.currentUserInfoKey)
-        KeychainHelper.delete(account: Self.tokenAccountKey)
-        KeychainHelper.delete(account: Self.refreshTokenAccountKey)
+        tokenStore.delete(account: Self.tokenAccountKey)
+        tokenStore.delete(account: Self.refreshTokenAccountKey)
     }
 
     public func clearError() {
@@ -441,7 +576,7 @@ public final class AuthManager: ObservableObject {
         
         let idString = queryItems.first(where: { $0.name == "id" })?.value ?? "0"
         let id = Int(idString) ?? 0
-        let username = queryItems.first(where: { $0.name == "username" })?.value ?? "Google User"
+        let username = queryItems.first(where: { $0.name == "username" })?.value ?? "Apple User"
         let refreshToken = queryItems.first(where: { $0.name == "refreshToken" })?.value
         
         let authUser = AuthUser(id: id, username: username)
@@ -451,10 +586,10 @@ public final class AuthManager: ObservableObject {
             userDefaults.set(userData, forKey: Self.currentUserInfoKey)
         }
         
-        // Save token to Keychain
-        KeychainHelper.save(token: token, account: Self.tokenAccountKey)
+        // Save token to tokenStore
+        tokenStore.save(token: token, account: Self.tokenAccountKey)
         if let rToken = refreshToken {
-            KeychainHelper.save(token: rToken, account: Self.refreshTokenAccountKey)
+            tokenStore.save(token: rToken, account: Self.refreshTokenAccountKey)
             self.refreshToken = rToken
         }
         
@@ -462,21 +597,38 @@ public final class AuthManager: ObservableObject {
         self.token = token
     }
 
+    private func persistSession(authResponse: AuthResponse) {
+        // Save user to UserDefaults
+        if let userData = try? JSONEncoder().encode(authResponse.user) {
+            userDefaults.set(userData, forKey: Self.currentUserInfoKey)
+        }
+
+        // Save token to tokenStore
+        tokenStore.save(token: authResponse.token, account: Self.tokenAccountKey)
+        if let rToken = authResponse.refreshToken {
+            tokenStore.save(token: rToken, account: Self.refreshTokenAccountKey)
+            self.refreshToken = rToken
+        }
+
+        self.user = authResponse.user
+        self.token = authResponse.token
+    }
+
+    private func parseErrorMessage(from data: Data, fallback: String) -> String {
+        if let errorResponse = try? JSONDecoder().decode(AuthErrorResponse.self, from: data) {
+            return errorResponse.error
+        }
+        return fallback
+    }
+
     private func performAuthRequest(path: String, username: String, password: String) async -> Bool {
         isLoading = true
         error = nil
 
-        guard var endpointUrl = URL(string: signalingAPIEndpoint) else {
+        guard let endpointUrl = makeURL(path: path) else {
             self.error = "Invalid API Endpoint URL"
             self.isLoading = false
             return false
-        }
-        
-        // Append path component properly
-        if #available(macOS 13.0, *) {
-            endpointUrl = endpointUrl.appending(path: path)
-        } else {
-            endpointUrl = endpointUrl.appendingPathComponent(path)
         }
 
         var request = URLRequest(url: endpointUrl)
@@ -502,30 +654,12 @@ public final class AuthManager: ObservableObject {
 
             if (200..<300).contains(httpResponse.statusCode) {
                 let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
-
-                // Save user to UserDefaults
-                if let userData = try? JSONEncoder().encode(authResponse.user) {
-                    userDefaults.set(userData, forKey: Self.currentUserInfoKey)
-                }
-
-                // Save token to Keychain
-                KeychainHelper.save(token: authResponse.token, account: Self.tokenAccountKey)
-                if let rToken = authResponse.refreshToken {
-                    KeychainHelper.save(token: rToken, account: Self.refreshTokenAccountKey)
-                    self.refreshToken = rToken
-                }
-
-                self.user = authResponse.user
-                self.token = authResponse.token
+                self.persistSession(authResponse: authResponse)
                 self.isLoading = false
                 return true
             } else {
-                // Try to parse error message from server
-                if let errorResponse = try? JSONDecoder().decode(AuthErrorResponse.self, from: data) {
-                    self.error = errorResponse.error
-                } else {
-                    self.error = "Request failed with status code \(httpResponse.statusCode)"
-                }
+                let errorMsg = self.parseErrorMessage(from: data, fallback: "Request failed with status code \(httpResponse.statusCode)")
+                self.error = errorMsg
                 self.isLoading = false
                 return false
             }
@@ -570,6 +704,3 @@ nonisolated private func isTokenExpired(_ token: String) -> Bool {
     let expirationDate = Date(timeIntervalSince1970: exp)
     return expirationDate < Date(timeIntervalSinceNow: 30) // Expired or expiring within 30 seconds
 }
-
-
-

@@ -317,11 +317,22 @@ final class LocalRuntimeController: ObservableObject {
         userDefaults.set(customUserFolderPath, forKey: Self.customUserFolderPathKey)
     }
 
+    var hasRequiredCredentials: Bool {
+        switch managedModelProvider {
+        case .gemini:
+            return !managedGoogleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .custom:
+            return !managedLocalLLMApiBase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .cerebras:
+            return !managedCerebrasAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     func refreshStatus() async {
         lastRuntimeError = nil
         recentLogs = ""
 
-        guard let configuration = resolvedConfiguration else {
+        guard let configuration = resolvedConfiguration, hasRequiredCredentials else {
             currentManagedEndpoint = nil
             runtimeState = .stopped
             runtimeStatusDetail = managedRuntimeSetupMessage
@@ -359,7 +370,6 @@ final class LocalRuntimeController: ObservableObject {
         recentLogs = ""
         currentManagedEndpoint = nil
         detectedContainerVersion = nil
-
 
         guard let configuration = resolvedConfiguration else {
             print("[LocalRuntimeController] Start failed: invalid configuration - \(invalidConfigurationMessage)")

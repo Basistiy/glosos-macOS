@@ -7,7 +7,7 @@
 
 import Foundation
 import Testing
-@testable import glosos_macOS
+@testable import Glosos
 
 @MainActor
 struct LocalRuntimeControllerTests {

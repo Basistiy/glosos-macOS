@@ -8,7 +8,7 @@
 import Foundation
 import Testing
 import AVFoundation
-@testable import glosos_macOS
+@testable import Glosos
 
 @MainActor
 struct glosos_macOSTests {

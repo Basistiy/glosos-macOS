@@ -7,7 +7,7 @@
 
 import Foundation
 import Testing
-@testable import glosos_macOS
+@testable import Glosos
 
 /// A mock URLProtocol to intercept URLSession network requests in tests
 private final class MockURLProtocol: URLProtocol {
@@ -45,9 +45,7 @@ struct AuthManagerTests {
 
     @Test
     @MainActor
-    func loginSuccessfulStoresCredentialsAndToken() async throws {
-        KeychainHelper.delete(account: "current_user_token")
-
+    func loginWithEmailSuccessfulStoresCredentialsAndToken() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let mockSession = URLSession(configuration: configuration)
@@ -56,12 +54,14 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
 
-        let expectedUser = AuthUser(id: 42, username: "testuser")
+        let expectedUser = AuthUser(id: 42, username: "testuser", email: "test@example.com")
         let responsePayload = AuthResponse(
             message: "Login successful",
             token: "valid-jwt-token-xyz",
+            refreshToken: "valid-refresh-token-123",
             user: expectedUser
         )
         let responseData = try JSONEncoder().encode(responsePayload)
@@ -69,6 +69,11 @@ struct AuthManagerTests {
         MockURLProtocol.requestHandler = { request in
             #expect(request.url?.path == "/api/auth/login")
             #expect(request.httpMethod == "POST")
+
+            if let body = request.httpBody, let loginReq = try? JSONDecoder().decode(EmailLoginRequest.self, from: body) {
+                #expect(loginReq.login == "test@example.com")
+                #expect(loginReq.password == "password123")
+            }
 
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -79,31 +84,28 @@ struct AuthManagerTests {
             return (response, responseData)
         }
 
-        let success = await manager.login(username: "testuser", password: "password123")
+        let result = await manager.loginWithEmail(identifier: "test@example.com", password: "password123")
 
-        #expect(success)
+        #expect(result == .success)
         #expect(manager.user == expectedUser)
         #expect(manager.token == "valid-jwt-token-xyz")
+        #expect(manager.refreshToken == "valid-refresh-token-123")
         #expect(manager.error == nil)
 
         // Verify storage
-        #expect(KeychainHelper.get(account: "current_user_token") == "valid-jwt-token-xyz")
+        #expect(tokenStore.get(account: "current_user_token") == "valid-jwt-token-xyz")
+        #expect(tokenStore.get(account: "current_user_refresh_token") == "valid-refresh-token-123")
         if let storedData = mockDefaults.data(forKey: "currentUserInfo"),
            let storedUser = try? JSONDecoder().decode(AuthUser.self, from: storedData) {
             #expect(storedUser == expectedUser)
         } else {
             Issue.record("User not saved in UserDefaults")
         }
-
-        // Clean up
-        KeychainHelper.delete(account: "current_user_token")
     }
 
     @Test
     @MainActor
-    func loginFailureSetsErrorState() async throws {
-        KeychainHelper.delete(account: "current_user_token")
-
+    func loginWithEmailRequiresVerificationReturnsCorrectState() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let mockSession = URLSession(configuration: configuration)
@@ -112,9 +114,49 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
 
-        let errorPayload = AuthErrorResponse(error: "Invalid username or password")
+        let errorPayload = AuthErrorResponse(
+            error: "Email verification required",
+            requiresVerification: true,
+            email: "unverified@example.com"
+        )
+        let responseData = try JSONEncoder().encode(errorPayload)
+
+        MockURLProtocol.requestHandler = { request in
+            #expect(request.url?.path == "/api/auth/login")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 403,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseData)
+        }
+
+        let result = await manager.loginWithEmail(identifier: "unverified@example.com", password: "password123")
+
+        #expect(result == .requiresVerification(email: "unverified@example.com"))
+        #expect(manager.user == nil)
+        #expect(manager.token == nil)
+    }
+
+    @Test
+    @MainActor
+    func loginFailureSetsErrorState() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
+
+        let errorPayload = AuthErrorResponse(error: "Invalid email/username or password")
         let responseData = try JSONEncoder().encode(errorPayload)
 
         MockURLProtocol.requestHandler = { request in
@@ -127,20 +169,18 @@ struct AuthManagerTests {
             return (response, responseData)
         }
 
-        let success = await manager.login(username: "testuser", password: "wrong_password")
+        let result = await manager.loginWithEmail(identifier: "test@example.com", password: "wrong_password")
 
-        #expect(!success)
+        #expect(result == .failure("Invalid email/username or password"))
         #expect(manager.user == nil)
         #expect(manager.token == nil)
-        #expect(manager.error == "Invalid username or password")
-        #expect(KeychainHelper.get(account: "current_user_token") == nil)
+        #expect(manager.error == "Invalid email/username or password")
+        #expect(tokenStore.get(account: "current_user_token") == nil)
     }
 
     @Test
     @MainActor
-    func registerSuccessfulStoresCredentials() async throws {
-        KeychainHelper.delete(account: "current_user_token")
-
+    func verifyEmailOTPSuccessfulStoresCredentialsAndToken() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let mockSession = URLSession(configuration: configuration)
@@ -149,36 +189,110 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
 
-        let expectedUser = AuthUser(id: 100, username: "newuser")
+        let expectedUser = AuthUser(id: 88, username: "verifieduser", email: "verified@example.com")
         let responsePayload = AuthResponse(
-            message: "User registered successfully",
-            token: "new-jwt-token-123",
+            message: "Email verified successfully!",
+            token: "verified-jwt-token-999",
+            refreshToken: "verified-refresh-token-888",
             user: expectedUser
         )
         let responseData = try JSONEncoder().encode(responsePayload)
 
         MockURLProtocol.requestHandler = { request in
-            #expect(request.url?.path == "/api/auth/register")
+            #expect(request.url?.path == "/api/auth/verify-email")
+            #expect(request.httpMethod == "POST")
+
+            if let body = request.httpBody, let req = try? JSONDecoder().decode(VerifyEmailRequest.self, from: body) {
+                #expect(req.email == "verified@example.com")
+                #expect(req.otp == "123456")
+            }
+
             let response = HTTPURLResponse(
                 url: request.url!,
-                statusCode: 201,
+                statusCode: 200,
                 httpVersion: nil,
                 headerFields: ["Content-Type": "application/json"]
             )!
             return (response, responseData)
         }
 
-        let success = await manager.register(username: "newuser", password: "password123")
+        let success = await manager.verifyEmailOTP(email: "verified@example.com", otp: "123456")
 
         #expect(success)
         #expect(manager.user == expectedUser)
-        #expect(manager.token == "new-jwt-token-123")
-        #expect(KeychainHelper.get(account: "current_user_token") == "new-jwt-token-123")
+        #expect(manager.token == "verified-jwt-token-999")
+        #expect(manager.refreshToken == "verified-refresh-token-888")
+        #expect(tokenStore.get(account: "current_user_token") == "verified-jwt-token-999")
+    }
 
-        // Clean up
-        KeychainHelper.delete(account: "current_user_token")
+    @Test
+    @MainActor
+    func verifyEmailOTPFailureSetsErrorState() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
+
+        let errorPayload = AuthErrorResponse(error: "Invalid verification code")
+        let responseData = try JSONEncoder().encode(errorPayload)
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 400,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseData)
+        }
+
+        let success = await manager.verifyEmailOTP(email: "user@example.com", otp: "000000")
+
+        #expect(!success)
+        #expect(manager.token == nil)
+        #expect(manager.error == "Invalid verification code")
+    }
+
+    @Test
+    @MainActor
+    func resendOTPSuccessful() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let mockSession = URLSession(configuration: configuration)
+
+        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
+        let mockDefaults = UserDefaults(suiteName: suiteName)!
+        mockDefaults.removePersistentDomain(forName: suiteName)
+
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: InMemoryTokenStore(), autoRestoreSession: false)
+
+        let responsePayload = GenericMessageResponse(message: "Verification code resent successfully. Please check your email.")
+        let responseData = try JSONEncoder().encode(responsePayload)
+
+        MockURLProtocol.requestHandler = { request in
+            #expect(request.url?.path == "/api/auth/resend-otp")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, responseData)
+        }
+
+        let (success, message) = await manager.resendOTP(email: "user@example.com")
+
+        #expect(success)
+        #expect(message == "Verification code resent successfully. Please check your email.")
     }
 
     @Test
@@ -188,12 +302,15 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults)
-        let dummyUser = AuthUser(id: 1, username: "test")
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, tokenStore: tokenStore, autoRestoreSession: false)
+        let dummyUser = AuthUser(id: 1, username: "test", email: "test@example.com")
         manager.user = dummyUser
         manager.token = "some-token"
+        manager.refreshToken = "some-refresh-token"
 
-        KeychainHelper.save(token: "some-token", account: "current_user_token")
+        tokenStore.save(token: "some-token", account: "current_user_token")
+        tokenStore.save(token: "some-refresh-token", account: "current_user_refresh_token")
         let userData = try! JSONEncoder().encode(dummyUser)
         mockDefaults.set(userData, forKey: "currentUserInfo")
 
@@ -201,15 +318,15 @@ struct AuthManagerTests {
 
         #expect(manager.user == nil)
         #expect(manager.token == nil)
-        #expect(KeychainHelper.get(account: "current_user_token") == nil)
+        #expect(manager.refreshToken == nil)
+        #expect(tokenStore.get(account: "current_user_token") == nil)
+        #expect(tokenStore.get(account: "current_user_refresh_token") == nil)
         #expect(mockDefaults.data(forKey: "currentUserInfo") == nil)
     }
 
     @Test
     @MainActor
     func loginWithAppleSuccessfulStoresCredentialsAndToken() async throws {
-        KeychainHelper.delete(account: "current_user_token")
-
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let mockSession = URLSession(configuration: configuration)
@@ -218,9 +335,10 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
 
-        let expectedUser = AuthUser(id: 99, username: "apple_user")
+        let expectedUser = AuthUser(id: 99, username: "apple_user", email: "jane.doe@example.com")
         let responsePayload = AuthResponse(
             message: "Apple login successful",
             token: "apple-jwt-token-xyz",
@@ -265,60 +383,13 @@ struct AuthManagerTests {
         #expect(manager.error == nil)
 
         // Verify storage
-        #expect(KeychainHelper.get(account: "current_user_token") == "apple-jwt-token-xyz")
+        #expect(tokenStore.get(account: "current_user_token") == "apple-jwt-token-xyz")
         if let storedData = mockDefaults.data(forKey: "currentUserInfo"),
            let storedUser = try? JSONDecoder().decode(AuthUser.self, from: storedData) {
             #expect(storedUser == expectedUser)
         } else {
             Issue.record("User not saved in UserDefaults")
         }
-
-        // Clean up
-        KeychainHelper.delete(account: "current_user_token")
-    }
-
-    @Test
-    @MainActor
-    func loginWithAppleFailureSetsErrorState() async throws {
-        KeychainHelper.delete(account: "current_user_token")
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MockURLProtocol.self]
-        let mockSession = URLSession(configuration: configuration)
-
-        let suiteName = "AuthManagerTests.\(UUID().uuidString)"
-        let mockDefaults = UserDefaults(suiteName: suiteName)!
-        mockDefaults.removePersistentDomain(forName: suiteName)
-
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
-
-        let errorPayload = AuthErrorResponse(error: "Invalid Apple identity token")
-        let responseData = try JSONEncoder().encode(errorPayload)
-
-        MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 400,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, responseData)
-        }
-
-        let success = await manager.loginWithApple(
-            identityToken: "invalid-token",
-            authorizationCode: nil,
-            userIdentifier: "mock-user-id",
-            firstName: nil,
-            lastName: nil,
-            email: nil
-        )
-
-        #expect(!success)
-        #expect(manager.user == nil)
-        #expect(manager.token == nil)
-        #expect(manager.error == "Invalid Apple identity token")
-        #expect(KeychainHelper.get(account: "current_user_token") == nil)
     }
 
     @Test
@@ -332,10 +403,11 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
 
         // Set up stored refresh token
-        KeychainHelper.save(token: "valid-refresh-token", account: "current_user_refresh_token")
+        tokenStore.save(token: "valid-refresh-token", account: "current_user_refresh_token")
 
         // Simulate network failure during refresh request
         MockURLProtocol.requestHandler = { _ in
@@ -345,9 +417,6 @@ struct AuthManagerTests {
         let result = await manager.refreshAccessTokenDetailed()
 
         #expect(result == .networkError)
-
-        // Clean up
-        KeychainHelper.delete(account: "current_user_refresh_token")
     }
 
     @Test
@@ -361,10 +430,11 @@ struct AuthManagerTests {
         let mockDefaults = UserDefaults(suiteName: suiteName)!
         mockDefaults.removePersistentDomain(forName: suiteName)
 
-        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession)
+        let tokenStore = InMemoryTokenStore()
+        let manager = AuthManager(userDefaults: mockDefaults, urlSession: mockSession, tokenStore: tokenStore, autoRestoreSession: false)
 
         // Set up stored refresh token
-        KeychainHelper.save(token: "expired-refresh-token", account: "current_user_refresh_token")
+        tokenStore.save(token: "expired-refresh-token", account: "current_user_refresh_token")
 
         let errorPayload = AuthErrorResponse(error: "Invalid refresh token")
         let responseData = try JSONEncoder().encode(errorPayload)
@@ -382,8 +452,5 @@ struct AuthManagerTests {
         let result = await manager.refreshAccessTokenDetailed()
 
         #expect(result == .invalidToken)
-
-        // Clean up
-        KeychainHelper.delete(account: "current_user_refresh_token")
     }
 }
