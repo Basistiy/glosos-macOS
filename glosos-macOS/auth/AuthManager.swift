@@ -53,6 +53,8 @@ public final class AuthManager: ObservableObject {
     private static let currentUserInfoKey = "currentUserInfo"
     private static let tokenAccountKey = "current_user_token"
     private static let refreshTokenAccountKey = "current_user_refresh_token"
+    private static let emailAccountKey = "current_user_email"
+    private static let passwordAccountKey = "current_user_password"
 
     nonisolated(unsafe) private var tokenExpiredObserver: Any?
     private let presentationContextProvider = PresentationContextProvider()
@@ -88,9 +90,13 @@ public final class AuthManager: ObservableObject {
                 case .success:
                     print("[AuthManager] Token refreshed successfully.")
                 case .invalidToken:
-                    print("[AuthManager] Refresh token is invalid or expired. Logging out...")
-                    self.logout()
-                    self.error = "Session expired. Please log in again."
+                    print("[AuthManager] Refresh token is invalid or expired. Attempting silent re-login...")
+                    let silentReloginSuccess = await self.attemptSilentRelogin()
+                    if !silentReloginSuccess {
+                        print("[AuthManager] Silent re-login failed. Logging out...")
+                        self.logout()
+                        self.error = "Session expired. Please log in again."
+                    }
                 case .networkError:
                     print("[AuthManager] Network error during token refresh. Session preserved, will retry when network is restored.")
                 }
@@ -135,8 +141,12 @@ public final class AuthManager: ObservableObject {
                 Task {
                     let result = await self.refreshAccessTokenDetailed()
                     if result == .invalidToken {
-                        print("[AuthManager] Stored token expired and refresh failed. Logging out...")
-                        self.logout()
+                        print("[AuthManager] Stored token expired and refresh failed. Attempting silent re-login...")
+                        let silentReloginSuccess = await self.attemptSilentRelogin()
+                        if !silentReloginSuccess {
+                            print("[AuthManager] Silent re-login failed. Logging out...")
+                            self.logout()
+                        }
                     } else if result == .networkError {
                         self.token = storedToken
                     }
@@ -201,6 +211,10 @@ public final class AuthManager: ObservableObject {
 
                 // Save new access token
                 tokenStore.save(token: refreshResponse.token, account: Self.tokenAccountKey)
+                if let newRefreshToken = refreshResponse.refreshToken {
+                    tokenStore.save(token: newRefreshToken, account: Self.refreshTokenAccountKey)
+                    self.refreshToken = newRefreshToken
+                }
 
                 self.token = refreshResponse.token
                 return .success
@@ -226,22 +240,28 @@ public final class AuthManager: ObservableObject {
     // MARK: - Email Log In
 
     @discardableResult
-    public func loginWithEmail(identifier: String, password: String) async -> LoginResult {
-        isLoading = true
-        error = nil
+    public func loginWithEmail(identifier: String, password: String, isSilent: Bool = false) async -> LoginResult {
+        if !isSilent {
+            isLoading = true
+            error = nil
+        }
 
         let trimmedIdentifier = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedIdentifier.isEmpty || password.isEmpty {
             let msg = "Email/username and password are required"
-            self.error = msg
-            self.isLoading = false
+            if !isSilent {
+                self.error = msg
+                self.isLoading = false
+            }
             return .failure(msg)
         }
 
         guard let endpointUrl = makeURL(path: "auth/login") else {
             let msg = "Invalid API Endpoint URL"
-            self.error = msg
-            self.isLoading = false
+            if !isSilent {
+                self.error = msg
+                self.isLoading = false
+            }
             return .failure(msg)
         }
 
@@ -252,8 +272,10 @@ public final class AuthManager: ObservableObject {
         let requestBody = EmailLoginRequest(login: trimmedIdentifier, password: password)
         guard let httpBody = try? JSONEncoder().encode(requestBody) else {
             let msg = "Failed to encode request parameters"
-            self.error = msg
-            self.isLoading = false
+            if !isSilent {
+                self.error = msg
+                self.isLoading = false
+            }
             return .failure(msg)
         }
         request.httpBody = httpBody
@@ -262,41 +284,68 @@ public final class AuthManager: ObservableObject {
             let (data, response) = try await urlSession.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 let msg = "Invalid server response"
-                self.error = msg
-                self.isLoading = false
+                if !isSilent {
+                    self.error = msg
+                    self.isLoading = false
+                }
                 return .failure(msg)
             }
 
             if (200..<300).contains(httpResponse.statusCode) {
                 let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
                 self.persistSession(authResponse: authResponse)
-                self.isLoading = false
+                
+                // Save credentials for silent re-login
+                self.tokenStore.save(token: trimmedIdentifier, account: Self.emailAccountKey)
+                self.tokenStore.save(token: password, account: Self.passwordAccountKey)
+                
+                if !isSilent {
+                    self.isLoading = false
+                }
                 return .success
             } else if httpResponse.statusCode == 403 {
                 // Check if email verification is required
                 if let errorResponse = try? JSONDecoder().decode(AuthErrorResponse.self, from: data),
                    errorResponse.requiresVerification == true {
                     let targetEmail = errorResponse.email ?? trimmedIdentifier
-                    self.isLoading = false
+                    if !isSilent {
+                        self.isLoading = false
+                    }
                     return .requiresVerification(email: targetEmail)
                 }
 
                 let errorMsg = self.parseErrorMessage(from: data, fallback: "Email verification required")
-                self.error = errorMsg
-                self.isLoading = false
+                if !isSilent {
+                    self.error = errorMsg
+                    self.isLoading = false
+                }
                 return .failure(errorMsg)
             } else {
                 let errorMsg = self.parseErrorMessage(from: data, fallback: "Login failed with status code \(httpResponse.statusCode)")
-                self.error = errorMsg
-                self.isLoading = false
+                if !isSilent {
+                    self.error = errorMsg
+                    self.isLoading = false
+                }
                 return .failure(errorMsg)
             }
         } catch {
             let msg = "Network error: \(error.localizedDescription)"
-            self.error = msg
-            self.isLoading = false
+            if !isSilent {
+                self.error = msg
+                self.isLoading = false
+            }
             return .failure(msg)
         }
+    }
+
+    private func attemptSilentRelogin() async -> Bool {
+        guard let email = tokenStore.get(account: Self.emailAccountKey),
+              let password = tokenStore.get(account: Self.passwordAccountKey) else {
+            return false
+        }
+        
+        let result = await self.loginWithEmail(identifier: email, password: password, isSilent: true)
+        return result == .success
     }
 
     // MARK: - Email Verification (OTP)
@@ -514,6 +563,8 @@ public final class AuthManager: ObservableObject {
         userDefaults.removeObject(forKey: Self.currentUserInfoKey)
         tokenStore.delete(account: Self.tokenAccountKey)
         tokenStore.delete(account: Self.refreshTokenAccountKey)
+        tokenStore.delete(account: Self.emailAccountKey)
+        tokenStore.delete(account: Self.passwordAccountKey)
     }
 
     public func clearError() {
@@ -608,6 +659,9 @@ public final class AuthManager: ObservableObject {
         if let rToken = authResponse.refreshToken {
             tokenStore.save(token: rToken, account: Self.refreshTokenAccountKey)
             self.refreshToken = rToken
+        } else {
+            tokenStore.delete(account: Self.refreshTokenAccountKey)
+            self.refreshToken = nil
         }
 
         self.user = authResponse.user
@@ -655,6 +709,11 @@ public final class AuthManager: ObservableObject {
             if (200..<300).contains(httpResponse.statusCode) {
                 let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
                 self.persistSession(authResponse: authResponse)
+                
+                // Save credentials for silent re-login
+                self.tokenStore.save(token: username, account: Self.emailAccountKey)
+                self.tokenStore.save(token: password, account: Self.passwordAccountKey)
+                
                 self.isLoading = false
                 return true
             } else {

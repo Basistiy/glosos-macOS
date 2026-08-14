@@ -32,13 +32,71 @@ public struct AuthResponse: Codable, Equatable, Sendable {
         self.refreshToken = refreshToken
         self.user = user
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case message
+        case token
+        case refreshToken
+        case refresh_token
+        case user
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.message = try container.decode(String.self, forKey: .message)
+        self.token = try container.decode(String.self, forKey: .token)
+        self.user = try container.decode(AuthUser.self, forKey: .user)
+        
+        if let rt = try container.decodeIfPresent(String.self, forKey: .refreshToken) {
+            self.refreshToken = rt
+        } else if let rtSnake = try container.decodeIfPresent(String.self, forKey: .refresh_token) {
+            self.refreshToken = rtSnake
+        } else {
+            self.refreshToken = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(message, forKey: .message)
+        try container.encode(token, forKey: .token)
+        try container.encodeIfPresent(refreshToken, forKey: .refreshToken)
+        try container.encode(user, forKey: .user)
+    }
 }
 
 public struct RefreshResponse: Codable, Equatable, Sendable {
     public let token: String
+    public let refreshToken: String?
 
-    public init(token: String) {
+    public init(token: String, refreshToken: String? = nil) {
         self.token = token
+        self.refreshToken = refreshToken
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case token
+        case refreshToken
+        case refresh_token
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.token = try container.decode(String.self, forKey: .token)
+        
+        if let rt = try container.decodeIfPresent(String.self, forKey: .refreshToken) {
+            self.refreshToken = rt
+        } else if let rtSnake = try container.decodeIfPresent(String.self, forKey: .refresh_token) {
+            self.refreshToken = rtSnake
+        } else {
+            self.refreshToken = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(token, forKey: .token)
+        try container.encodeIfPresent(refreshToken, forKey: .refreshToken)
     }
 }
 
@@ -115,7 +173,41 @@ public struct AppleAuthRequest: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Auth State Enums
+
 public enum LoginResult: Equatable, Sendable {
+    case success
+    case requiresVerification(email: String)
+    case failure(String)
+}
+
+public enum SignUpResult: Equatable, Sendable {
+    case success
+    case requiresVerification(email: String)
+    case failure(String)
+}
+
+public enum VerifyEmailResult: Equatable, Sendable {
+    case success
+    case failure(String)
+}
+
+public enum ResendOTPResult: Equatable, Sendable {
+    case success
+    case failure(String)
+}
+
+public enum PasswordResetRequestResult: Equatable, Sendable {
+    case success
+    case failure(String)
+}
+
+public enum PasswordResetConfirmResult: Equatable, Sendable {
+    case success
+    case failure(String)
+}
+
+public enum ChangePasswordResult: Equatable, Sendable {
     case success
     case requiresVerification(email: String)
     case failure(String)
@@ -141,15 +233,24 @@ public struct KeychainTokenStore: TokenStoring {
     @discardableResult
     public func save(token: String, account: String) -> Bool {
         let data = Data(token.utf8)
-        let query: [String: Any] = [
+        
+        // 1. Delete any existing item for (service, account)
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        // 2. Add the new item
+        let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
-
-        SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
         return status == errSecSuccess
     }
 
@@ -180,7 +281,7 @@ public struct KeychainTokenStore: TokenStoring {
         ]
 
         let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }
 

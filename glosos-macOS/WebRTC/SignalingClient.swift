@@ -128,8 +128,7 @@ public actor SignalingClient {
         reconnectTask = nil
         reconnectAttempts = 0
         
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
+        stopHeartbeat()
         
         guard isConnected || webSocketTask != nil else { return }
         
@@ -210,8 +209,8 @@ public actor SignalingClient {
     private func handleMessage(_ text: String) {
         guard let firstChar = text.first else { return }
         
-        // Reset heartbeat timer on any incoming message
-        self.resetHeartbeatTimer()
+        // Reset heartbeat timestamp on any incoming message from server
+        self.lastHeartbeatTime = Date()
         
         if firstChar == "0" {
             // Engine.IO Handshake packet
@@ -228,6 +227,9 @@ public actor SignalingClient {
                 }
                 print("[SignalingClient] Handshake heartbeat settings: pingInterval=\(self.pingInterval)s, pingTimeout=\(self.pingTimeout)s")
             }
+            
+            // Start heartbeat ping and monitor tasks
+            self.startHeartbeat()
             
             // Send Socket.IO connect packet to the default namespace (40) with JWT Auth Token in payload
             let authPayload = [
@@ -256,8 +258,11 @@ public actor SignalingClient {
                 await currentDelegate?.signalingClientDidConnect(self)
             }
         } else if firstChar == "2" {
-            // Ping from server: reply with Pong (3) immediately to maintain connection
+            // Ping from server (Engine.IO v3 compatibility): reply with Pong (3)
             self.sendRaw("3")
+        } else if firstChar == "3" {
+            // Pong from server (Engine.IO v4 response to client ping)
+            // Heartbeat timestamp was already updated at the beginning of handleMessage
         } else if text.hasPrefix("42") {
             // Socket.IO custom event
             let jsonStartIndex = text.index(text.startIndex, offsetBy: 2)
@@ -371,8 +376,7 @@ public actor SignalingClient {
     }
     
     private func handleDisconnect() {
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
+        stopHeartbeat()
         
         guard isConnected || webSocketTask != nil else { return }
         webSocketTask = nil
@@ -419,31 +423,41 @@ public actor SignalingClient {
         }
     }
     
-    private func resetHeartbeatTimer() {
+    private func startHeartbeat() {
+        stopHeartbeat()
         lastHeartbeatTime = Date()
-        guard heartbeatTask == nil else { return }
         
-        heartbeatTask = Task {
+        let timeout = self.pingInterval + self.pingTimeout
+        
+        heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .seconds(2))
                 } catch {
                     break
                 }
-                
-                guard !Task.isCancelled else { break }
-                
-                let elapsed = Date().timeIntervalSince(self.lastHeartbeatTime)
-                if elapsed >= (self.pingInterval + self.pingTimeout) {
-                    self.handleHeartbeatTimeout()
+                guard !Task.isCancelled, let self = self else { break }
+                let elapsed = await self.timeSinceLastHeartbeat()
+                if elapsed >= timeout {
+                    await self.handleHeartbeatTimeout()
                     break
                 }
             }
         }
     }
     
+    private func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+    
+    private func timeSinceLastHeartbeat() -> TimeInterval {
+        Date().timeIntervalSince(lastHeartbeatTime)
+    }
+    
+
     private func handleHeartbeatTimeout() {
-        print("[SignalingClient] Heartbeat timeout: No ping or message received from server for \(self.pingInterval + self.pingTimeout) seconds. Marking connection as dead.")
+        print("[SignalingClient] Heartbeat timeout: No ping, pong, or message received from server for \(self.pingInterval + self.pingTimeout) seconds. Marking connection as dead.")
         let error = NSError(
             domain: "SignalingClient",
             code: -3,

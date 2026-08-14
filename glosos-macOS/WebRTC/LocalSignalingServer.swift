@@ -1033,7 +1033,11 @@ public final class LocalSignalingServer: ObservableObject {
                         } else {
                             try {
                                 const parsed = JSON.parse(event.data);
-                                appendMessage('macOS App', parsed.text || event.data);
+                                if (parsed.type === 'transcription') {
+                                    appendMessage('me', parsed.text || event.data);
+                                } else {
+                                    appendMessage('macOS App', parsed.text || event.data);
+                                }
                             } catch (e) {
                                 appendMessage('macOS App', event.data);
                             }
