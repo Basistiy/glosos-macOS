@@ -57,6 +57,7 @@ public final class AuthManager: ObservableObject {
     private static let passwordAccountKey = "current_user_password"
 
     nonisolated(unsafe) private var tokenExpiredObserver: Any?
+    private var refreshRetryTask: Task<Void, Never>?
     private let presentationContextProvider = PresentationContextProvider()
 
     public init(
@@ -85,10 +86,37 @@ public final class AuthManager: ObservableObject {
             print("[AuthManager] Auth token expired or invalid. Attempting token refresh...")
             guard let self = self else { return }
             Task { @MainActor in
+                await self.handleAuthTokenExpired()
+            }
+        }
+    }
+
+    deinit {
+        refreshRetryTask?.cancel()
+        if let observer = tokenExpiredObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func handleAuthTokenExpired() async {
+        refreshRetryTask?.cancel()
+        refreshRetryTask = Task { @MainActor in
+            let retryDelays: [TimeInterval] = [0, 2.0, 4.0, 8.0, 16.0]
+            for (index, delay) in retryDelays.enumerated() {
+                if delay > 0 {
+                    print("[AuthManager] Retrying token refresh (attempt \(index + 1)/\(retryDelays.count)) in \(delay)s...")
+                    do {
+                        try await Task.sleep(for: .seconds(delay))
+                    } catch {
+                        return
+                    }
+                }
+                
                 let result = await self.refreshAccessTokenDetailed()
                 switch result {
                 case .success:
                     print("[AuthManager] Token refreshed successfully.")
+                    return
                 case .invalidToken:
                     print("[AuthManager] Refresh token is invalid or expired. Attempting silent re-login...")
                     let silentReloginSuccess = await self.attemptSilentRelogin()
@@ -97,16 +125,14 @@ public final class AuthManager: ObservableObject {
                         self.logout()
                         self.error = "Session expired. Please log in again."
                     }
+                    return
                 case .networkError:
-                    print("[AuthManager] Network error during token refresh. Session preserved, will retry when network is restored.")
+                    print("[AuthManager] Network error during token refresh (attempt \(index + 1)/\(retryDelays.count)).")
+                    if index == retryDelays.count - 1 {
+                        print("[AuthManager] Network error during token refresh. Session preserved, will retry when network is restored.")
+                    }
                 }
             }
-        }
-    }
-
-    deinit {
-        if let observer = tokenExpiredObserver {
-            NotificationCenter.default.removeObserver(observer)
         }
     }
 

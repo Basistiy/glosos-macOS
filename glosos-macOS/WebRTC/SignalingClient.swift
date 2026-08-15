@@ -40,6 +40,7 @@ public actor SignalingClient {
     private var reconnectTask: Task<Void, Never>?
     
     private var lastHeartbeatTime = Date()
+    private var lastPingSentTime = Date()
     private var heartbeatTask: Task<Void, Never>?
     private var pingInterval: TimeInterval = 25.0
     private var pingTimeout: TimeInterval = 20.0
@@ -55,6 +56,7 @@ public actor SignalingClient {
     
     public func updateToken(_ newToken: String) {
         self.token = newToken
+        self.isExplicitDisconnect = false
     }
     
     public func connect() {
@@ -76,9 +78,9 @@ public actor SignalingClient {
         print("[SignalingClient] Connecting to \(webSocketURL.absoluteString)...")
         
         let configuration = URLSessionConfiguration.default
-        // Set reasonable timeout
+        // Set reasonable request timeout, but use a large resource timeout for long-lived WebSockets
         configuration.timeoutIntervalForRequest = 60
-        configuration.timeoutIntervalForResource = 300
+        configuration.timeoutIntervalForResource = 604800 // 7 days (prevents premature 5-minute task timeout)
         
         let delegateHelper = SignalingSessionDelegate(
             onOpen: {
@@ -425,9 +427,9 @@ public actor SignalingClient {
     
     private func startHeartbeat() {
         stopHeartbeat()
-        lastHeartbeatTime = Date()
-        
-        let timeout = self.pingInterval + self.pingTimeout
+        let now = Date()
+        self.lastHeartbeatTime = now
+        self.lastPingSentTime = now
         
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -437,12 +439,24 @@ public actor SignalingClient {
                     break
                 }
                 guard !Task.isCancelled, let self = self else { break }
-                let elapsed = await self.timeSinceLastHeartbeat()
-                if elapsed >= timeout {
-                    await self.handleHeartbeatTimeout()
-                    break
-                }
+                await self.performHeartbeatTick()
             }
+        }
+    }
+    
+    private func performHeartbeatTick() {
+        let now = Date()
+        
+        // 1. Send Engine.IO v4 client ping ("2") periodically every pingInterval seconds
+        if now.timeIntervalSince(self.lastPingSentTime) >= self.pingInterval {
+            self.lastPingSentTime = now
+            self.sendRaw("2")
+        }
+        
+        // 2. Check if server has gone silent beyond pingInterval + pingTimeout
+        let timeout = self.pingInterval + self.pingTimeout
+        if now.timeIntervalSince(self.lastHeartbeatTime) >= timeout {
+            self.handleHeartbeatTimeout()
         }
     }
     
@@ -451,11 +465,6 @@ public actor SignalingClient {
         heartbeatTask = nil
     }
     
-    private func timeSinceLastHeartbeat() -> TimeInterval {
-        Date().timeIntervalSince(lastHeartbeatTime)
-    }
-    
-
     private func handleHeartbeatTimeout() {
         print("[SignalingClient] Heartbeat timeout: No ping, pong, or message received from server for \(self.pingInterval + self.pingTimeout) seconds. Marking connection as dead.")
         let error = NSError(
