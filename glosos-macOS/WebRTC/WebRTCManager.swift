@@ -363,21 +363,7 @@ public final class WebRTCManager: NSObject {
     
     private var localAudioTrack: RTCAudioTrack?
     
-    public var isSpeakersMuted: Bool = true {
-        didSet {
-            audioState.isSpeakersMuted = isSpeakersMuted
-            updateSpeakersMuteState()
-        }
-    }
-    
-    private func updateSpeakersMuteState() {
-        let mixer = audioState.outputMixer
-        let volume: Float = isSpeakersMuted ? 0.0 : 1.0
-        if let mixer = mixer {
-            mixer.outputVolume = volume
-            print("[WebRTCManager] Set custom output mixer volume to \(volume)")
-        }
-    }
+    public var isSpeakersMuted: Bool = true
     
     private static let stunServers = [
         "stun:stun.l.google.com:19302",
@@ -608,12 +594,11 @@ public final class WebRTCManager: NSObject {
     
     public func playAudioFile(at url: URL, completion: @escaping @Sendable () -> Void) {
         guard let player = audioState.playerNode,
-              let micMixer = audioState.micMixerNode,
               let mainMixer = audioState.mainMixerNode,
               let dest = audioState.inputDestinationNode,
               let format = audioState.inputFormat,
               let engine = player.engine else {
-            print("[WebRTCManager] [Warning] playAudioFile called but playerNode, micMixerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
+            print("[WebRTCManager] [Warning] playAudioFile called but playerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
             completion()
             return
         }
@@ -624,25 +609,15 @@ public final class WebRTCManager: NSObject {
             print("[WebRTCManager] Playing resampled audio file with format: \(file.processingFormat)")
             
             engine.disconnectNodeOutput(player)
-            if let src = audioState.physicalInputNode {
-                engine.disconnectNodeOutput(src)
-            }
-            engine.disconnectNodeOutput(micMixer)
             engine.disconnectNodeOutput(mainMixer)
             
             let connectionFormat = monoFormat(for: file.processingFormat)
             engine.connect(player, to: mainMixer, format: connectionFormat)
             player.volume = 1.0
             
-            if let src = audioState.physicalInputNode {
-                engine.connect(src, to: micMixer, format: format)
-                micMixer.outputVolume = 0.0
-                engine.connect(micMixer, to: mainMixer, format: format)
-            }
-            
             engine.connect(mainMixer, to: dest, format: format)
             
-            print("[WebRTCManager] Reconnected WebRTC input path: player (1.0 vol) & physical microphone (0.0 vol via micMixer) -> mainMixer -> destination")
+            print("[WebRTCManager] Reconnected WebRTC input path: player (1.0 vol) -> mainMixer -> destination")
             
             audioState.setupPlayback(count: 1, completion: completion)
             
@@ -672,32 +647,21 @@ public final class WebRTCManager: NSObject {
     
     public func startAudioStream(format: AVAudioFormat, completion: @escaping @Sendable () -> Void) {
         guard let player = audioState.playerNode,
-              let micMixer = audioState.micMixerNode,
               let mainMixer = audioState.mainMixerNode,
               let dest = audioState.inputDestinationNode,
               let inputFmt = audioState.inputFormat,
               let engine = player.engine else {
-            print("[WebRTCManager] [Warning] startAudioStream called but playerNode, micMixerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
+            print("[WebRTCManager] [Warning] startAudioStream called but playerNode, mainMixerNode, inputDestinationNode, inputFormat, or engine is nil")
             completion()
             return
         }
         
         engine.disconnectNodeOutput(player)
-        if let src = audioState.physicalInputNode {
-            engine.disconnectNodeOutput(src)
-        }
-        engine.disconnectNodeOutput(micMixer)
         engine.disconnectNodeOutput(mainMixer)
         
         let connectionFormat = monoFormat(for: format)
         engine.connect(player, to: mainMixer, format: connectionFormat)
         player.volume = 1.0
-        
-        if let src = audioState.physicalInputNode {
-            engine.connect(src, to: micMixer, format: inputFmt)
-            micMixer.outputVolume = 0.0
-            engine.connect(micMixer, to: mainMixer, format: inputFmt)
-        }
         
         engine.connect(mainMixer, to: dest, format: inputFmt)
         
@@ -708,7 +672,7 @@ public final class WebRTCManager: NSObject {
             player.play()
         }
         
-        print("[WebRTCManager] Reconnected WebRTC input path for streaming: player (\(format.sampleRate)Hz) & physical microphone (0.0 vol via micMixer) -> mainMixer -> destination")
+        print("[WebRTCManager] Reconnected WebRTC input path for streaming: player (\(format.sampleRate)Hz) -> mainMixer -> destination")
     }
     
     public func submitAudioBuffer(_ buffer: AVAudioPCMBuffer) {
@@ -850,7 +814,10 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
     
     nonisolated public func audioDeviceModule(_ audioDeviceModule: RTCAudioDeviceModule, didStopEngine engine: AVAudioEngine, isPlayoutEnabled playoutEnabled: Bool, isRecordingEnabled recordingEnabled: Bool) -> Int {
         print("[WebRTCManager] audioDeviceModule didStopEngine. Playout: \(playoutEnabled), Recording: \(recordingEnabled)")
-        audioState.clearAudioGraph(engine: engine)
+        // NOTE: Do NOT call clearAudioGraph here. The engine may be stopping only to
+        // reconfigure (e.g. adding Recording to an existing Playout session). In that case,
+        // configureOutputFromSource is not called again, so our output mixer and tap must survive.
+        // Actual teardown cleanup is handled by didDisableEngine / willReleaseEngine.
         return 0
     }
     
@@ -875,32 +842,24 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
         engine.disconnectNodeInput(destination)
         
         let player = AVAudioPlayerNode()
-        let micMixer = AVAudioMixerNode()
         let mainMixer = AVAudioMixerNode()
         
         engine.attach(player)
-        engine.attach(micMixer)
         engine.attach(mainMixer)
         
         engine.connect(player, to: mainMixer, format: format)
         player.volume = 1.0
         
-        if let src = source {
-            engine.connect(src, to: micMixer, format: format)
-            micMixer.outputVolume = 0.0
-            print("[WebRTCManager] Programmatically muted physical microphone input using micMixer outputVolume")
-            engine.connect(micMixer, to: mainMixer, format: format)
-        }
-        
         engine.connect(mainMixer, to: destination, format: format)
         
         audioState.playerNode = player
-        audioState.micMixerNode = micMixer
+        audioState.micMixerNode = nil
         audioState.mainMixerNode = mainMixer
-        audioState.physicalInputNode = source
+        audioState.physicalInputNode = nil
         audioState.inputDestinationNode = destination
         audioState.inputFormat = format
         
+        print("[WebRTCManager] Configured isolated WebRTC input path: player (TTS) -> mainMixer -> destination (physical mic disconnected)")
         return 0
     }
     
@@ -920,14 +879,14 @@ extension WebRTCManager: RTCAudioDeviceModuleDelegate {
         let finalDest = destination ?? engine.mainMixerNode
         engine.connect(localOutputMixer, to: finalDest, format: format)
         
-        localOutputMixer.outputVolume = audioState.isSpeakersMuted ? 0.0 : 1.0
+        // Always mute the output mixer to prevent the browser's microphone audio
+        // from being played back through the Mac's speakers (echo/sidetone).
+        localOutputMixer.outputVolume = 0.0
         
         audioState.outputMixer = localOutputMixer
         audioState.audioEngine = engine
         
-        print("[WebRTCManager] Configured custom output mixer node with volume: \(localOutputMixer.outputVolume)")
-        
-        engine.mainMixerNode.outputVolume = 1.0
+        print("[WebRTCManager] Configured output: source -> mixer (vol=0) -> destination, tap captures for VAD")
         
         source.removeTap(onBus: 0)
         source.installTap(onBus: 0, bufferSize: 1024, format: format) { (buffer, time) in
