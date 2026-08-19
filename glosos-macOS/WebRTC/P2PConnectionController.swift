@@ -8,7 +8,7 @@
 import Foundation
 import Combine
 import Network
-import WebRTC
+import LiveKitWebRTC
 
 @MainActor
 final class P2PConnectionController: ObservableObject {
@@ -29,7 +29,7 @@ final class P2PConnectionController: ObservableObject {
     
     private var signalingClient: SignalingClient?
     private let webRTCManager: WebRTCManager
-    private var turnServers: [RTCIceServer] = []
+    private var turnServers: [LKRTCIceServer] = []
     
     private var currentCallerSocketId: String?
     @Published public private(set) var peerUsername: String?
@@ -50,7 +50,7 @@ final class P2PConnectionController: ObservableObject {
         self.startLocalServer()
     }
     
-    private func fetchTurnCredentials(apiEndpoint: String, token: String) async -> [RTCIceServer] {
+    private func fetchTurnCredentials(apiEndpoint: String, token: String) async -> [LKRTCIceServer] {
         var endpoint = apiEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         if endpoint.hasSuffix("/") {
             endpoint.removeLast()
@@ -89,7 +89,7 @@ final class P2PConnectionController: ObservableObject {
             let urls = turnData.urls ?? (turnData.url.map { [$0] } ?? [])
             guard !urls.isEmpty else { return [] }
             
-            let turnServer = RTCIceServer(
+            let turnServer = LKRTCIceServer(
                 urlStrings: urls,
                 username: turnData.username,
                 credential: turnData.credential
@@ -425,7 +425,7 @@ extension P2PConnectionController: SignalingClientDelegate {
             return
         }
         
-        let rtcCandidate = RTCIceCandidate(
+        let rtcCandidate = LKRTCIceCandidate(
             sdp: sdp,
             sdpMLineIndex: sdpMLineIndex,
             sdpMid: sdpMid
@@ -497,7 +497,7 @@ extension P2PConnectionController: WebRTCManagerDelegate {
         }
     }
     
-    public func webRTCManager(_ manager: WebRTCManager, didGenerateIceCandidate candidate: RTCIceCandidate) {
+    public func webRTCManager(_ manager: WebRTCManager, didGenerateIceCandidate candidate: LKRTCIceCandidate) {
         guard let targetId = currentCallerSocketId else { return }
         
         let candidateDict: [String: any Sendable] = [
@@ -574,7 +574,7 @@ extension P2PConnectionController: LocalSignalingServerDelegate {
     }
 
     public func localSignalingServer(_ server: LocalSignalingServer, didReceiveCandidate candidate: String, sdpMid: String?, sdpMLineIndex: Int32) async {
-        let rtcCandidate = RTCIceCandidate(sdp: candidate, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
+        let rtcCandidate = LKRTCIceCandidate(sdp: candidate, sdpMLineIndex: sdpMLineIndex, sdpMid: sdpMid)
         webRTCManager.addIceCandidate(rtcCandidate)
     }
 }

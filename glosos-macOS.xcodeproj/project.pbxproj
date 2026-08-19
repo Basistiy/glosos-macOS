@@ -9,8 +9,7 @@
 /* Begin PBXBuildFile section */
 		1E3D2BD72FF131F700541664 /* MLXAudioSTT in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000014 /* MLXAudioSTT */; };
 		1E3D2BD82FF131F700541664 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = F0A1B2C32FD6000000000015 /* MLXAudioTTS */; };
-		1EA72A952FD815BE00FC5BC6 /* WebRTC.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */; };
-		1EA72A962FD815BE00FC5BC6 /* WebRTC.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		1EA72A952FD815BE00FC5BC6 /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = 1EA72A942FD815BE00FC5BC7 /* LiveKitWebRTC */; };
 		B10000012FE0000000000001 /* Containerization in Frameworks */ = {isa = PBXBuildFile; productRef = B10000012FE0000000000011 /* Containerization */; };
 		B10000012FE0000000000002 /* ContainerizationArchive in Frameworks */ = {isa = PBXBuildFile; productRef = B10000012FE0000000000012 /* ContainerizationArchive */; };
 		B10000012FE0000000000003 /* ContainerizationExtras in Frameworks */ = {isa = PBXBuildFile; productRef = B10000012FE0000000000013 /* ContainerizationExtras */; };
@@ -29,22 +28,7 @@
 		};
 /* End PBXContainerItemProxy section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		1EA72A972FD815BE00FC5BC6 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				1EA72A962FD815BE00FC5BC6 /* WebRTC.xcframework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
-		1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */ = {isa = PBXFileReference; expectedSignature = "AppleDeveloperProgram:EHV7XZLAHA:Stream.io Inc"; lastKnownFileType = wrapper.xcframework; name = WebRTC.xcframework; path = Frameworks/WebRTC.xcframework; sourceTree = "<group>"; };
 		1EF1C5ED2FD0B8610011923D /* Glosos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Glosos.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1EF1C5FA2FD0B8620011923D /* glosos-macOSTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "glosos-macOSTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -75,7 +59,7 @@
 				F0A1B2C32FD6000000000003 /* HuggingFace in Frameworks */,
 				F0A1B2C32FD6000000000001 /* MLXAudioCore in Frameworks */,
 				F0A1B2C32FD6000000000002 /* MLXAudioVAD in Frameworks */,
-				1EA72A952FD815BE00FC5BC6 /* WebRTC.xcframework in Frameworks */,
+				1EA72A952FD815BE00FC5BC6 /* LiveKitWebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -89,20 +73,11 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		1EC757F82FD80D3E00D8E129 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				1EA72A942FD815BE00FC5BC6 /* WebRTC.xcframework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		1EF1C5E42FD0B8610011923D = {
 			isa = PBXGroup;
 			children = (
 				1EF1C5EF2FD0B8610011923D /* glosos-macOS */,
 				1EF1C5FD2FD0B8620011923D /* glosos-macOSTests */,
-				1EC757F82FD80D3E00D8E129 /* Frameworks */,
 				1EF1C5EE2FD0B8610011923D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -126,7 +101,6 @@
 				1EF1C5E92FD0B8610011923D /* Sources */,
 				1EF1C5EA2FD0B8610011923D /* Frameworks */,
 				1EF1C5EB2FD0B8610011923D /* Resources */,
-				1EA72A972FD815BE00FC5BC6 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -137,6 +111,7 @@
 			);
 			name = "glosos-macOS";
 			packageProductDependencies = (
+				1EA72A942FD815BE00FC5BC7 /* LiveKitWebRTC */,
 				B10000012FE0000000000013 /* ContainerizationExtras */,
 				B10000012FE0000000000012 /* ContainerizationArchive */,
 				B10000012FE0000000000011 /* Containerization */,
@@ -202,6 +177,7 @@
 			mainGroup = 1EF1C5E42FD0B8610011923D;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				1EA72A942FD815BE00FC5BC8 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
 				B10000012FE0000000000021 /* XCRemoteSwiftPackageReference "containerization" */,
 				F0A1B2C32FD6000000000022 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				F0A1B2C32FD6000000000021 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
@@ -399,10 +375,6 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Frameworks/WebRTC.xcframework/macos-arm64_x86_64",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Glosos;
 				INFOPLIST_KEY_CFBundleName = Glosos;
@@ -450,10 +422,6 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/Frameworks/WebRTC.xcframework/macos-arm64_x86_64",
-				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Glosos;
 				INFOPLIST_KEY_CFBundleName = Glosos;
@@ -559,6 +527,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		1EA72A942FD815BE00FC5BC8 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/livekit/webrtc-xcframework.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 114.5735.0;
+			};
+		};
 		B10000012FE0000000000021 /* XCRemoteSwiftPackageReference "containerization" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/apple/containerization.git";
@@ -588,6 +564,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		1EA72A942FD815BE00FC5BC7 /* LiveKitWebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1EA72A942FD815BE00FC5BC8 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
+			productName = LiveKitWebRTC;
+		};
 		B10000012FE0000000000011 /* Containerization */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = B10000012FE0000000000021 /* XCRemoteSwiftPackageReference "containerization" */;
