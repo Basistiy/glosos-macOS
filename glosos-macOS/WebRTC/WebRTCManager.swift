@@ -241,10 +241,86 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
     }
 }
 
+private final class WebRTCCaptureAudioProcessor: NSObject, LKRTCAudioCustomProcessingDelegate, @unchecked Sendable {
+    private let audioState: WebRTCAudioState
+    
+    init(audioState: WebRTCAudioState) {
+        self.audioState = audioState
+        super.init()
+    }
+    
+    nonisolated func audioProcessingInitialize(sampleRate: Int, channels: Int) {
+        print("[WebRTCManager] captureAudioProcessingInitialize: sampleRate=\(sampleRate), channels=\(channels)")
+        audioState.processingSampleRate = Double(sampleRate)
+        audioState.processingChannels = channels
+    }
+    
+    nonisolated func audioProcessingProcess(audioBuffer: LKRTCAudioBuffer) {
+        let frames = audioBuffer.frames
+        let channels = audioBuffer.channels
+        
+        let primaryBuf = audioBuffer.rawBuffer(forChannel: 0)
+        let hasCustomAudio = audioState.readSamples(into: primaryBuf, count: frames)
+        
+        if hasCustomAudio {
+            // Duplicate mono custom audio to remaining channels if multi-channel
+            if channels > 1 {
+                for ch in 1..<channels {
+                    let chBuf = audioBuffer.rawBuffer(forChannel: ch)
+                    memcpy(chBuf, primaryBuf, frames * MemoryLayout<Float>.size)
+                }
+            }
+        } else {
+            // Always silence microphone input when no custom audio (TTS/stream) is active.
+            // This prevents Mac's physical mic from broadcasting ambient noise/echo to the remote peer.
+            for ch in 0..<channels {
+                let chBuf = audioBuffer.rawBuffer(forChannel: ch)
+                memset(chBuf, 0, frames * MemoryLayout<Float>.size)
+            }
+        }
+    }
+    
+    nonisolated func audioProcessingRelease() {
+        print("[WebRTCManager] captureAudioProcessingRelease called.")
+    }
+}
+
+private final class WebRTCRenderAudioProcessor: NSObject, LKRTCAudioCustomProcessingDelegate, @unchecked Sendable {
+    private let audioState: WebRTCAudioState
+    
+    init(audioState: WebRTCAudioState) {
+        self.audioState = audioState
+        super.init()
+    }
+    
+    nonisolated func audioProcessingInitialize(sampleRate: Int, channels: Int) {
+        print("[WebRTCManager] renderAudioProcessingInitialize: sampleRate=\(sampleRate), channels=\(channels)")
+    }
+    
+    nonisolated func audioProcessingProcess(audioBuffer: LKRTCAudioBuffer) {
+        let frames = audioBuffer.frames
+        let channels = audioBuffer.channels
+        
+        if audioState.isSpeakersMuted {
+            // Silence local speaker playout of the remote peer's voice (prevents echo/sidetone).
+            for ch in 0..<channels {
+                let chBuf = audioBuffer.rawBuffer(forChannel: ch)
+                memset(chBuf, 0, frames * MemoryLayout<Float>.size)
+            }
+        }
+    }
+    
+    nonisolated func audioProcessingRelease() {
+        print("[WebRTCManager] renderAudioProcessingRelease called.")
+    }
+}
+
 @MainActor
 public final class WebRTCManager: NSObject {
     public weak var delegate: WebRTCManagerDelegate?
     
+    private let captureAudioProcessor: WebRTCCaptureAudioProcessor
+    private let renderAudioProcessor: WebRTCRenderAudioProcessor
     private var audioProcessingModule: LKRTCDefaultAudioProcessingModule?
     private var peerConnectionFactory: LKRTCPeerConnectionFactory
     private var peerConnection: LKRTCPeerConnection?
@@ -288,10 +364,16 @@ public final class WebRTCManager: NSObject {
     public override init() {
         RTCInitializeSSL()
         
+        let audioState = self.audioState
+        let captureProcessor = WebRTCCaptureAudioProcessor(audioState: audioState)
+        let renderProcessor = WebRTCRenderAudioProcessor(audioState: audioState)
+        self.captureAudioProcessor = captureProcessor
+        self.renderAudioProcessor = renderProcessor
+        
         let apm = LKRTCDefaultAudioProcessingModule(
             config: nil,
-            capturePostProcessingDelegate: nil,
-            renderPreProcessingDelegate: nil
+            capturePostProcessingDelegate: captureProcessor,
+            renderPreProcessingDelegate: renderProcessor
         )
         self.audioProcessingModule = apm
         
@@ -302,7 +384,6 @@ public final class WebRTCManager: NSObject {
             audioProcessingModule: apm
         )
         super.init()
-        apm.capturePostProcessingDelegate = self
     }
     
     deinit {
@@ -519,7 +600,13 @@ public final class WebRTCManager: NSObject {
         }
         
         let count = Int(monoBuffer.frameLength)
-        return Array(UnsafeBufferPointer(start: floatData, count: count))
+        // WebRTC's APM AudioBuffer (float) expects samples scaled to the Int16 range [-32768.0, 32767.0].
+        // CoreAudio's float buffers are in the [-1.0, 1.0] range, so they must be scaled up.
+        var scaledSamples = [Float](repeating: 0, count: count)
+        for i in 0..<count {
+            scaledSamples[i] = floatData[i] * 32768.0
+        }
+        return scaledSamples
     }
     
     public func playAudioBuffers(_ buffers: [AVAudioPCMBuffer], completion: @escaping @Sendable () -> Void) {
@@ -606,29 +693,53 @@ public final class WebRTCManager: NSObject {
         pcmBuffer.frameLength = AVAudioFrameCount(numSamples)
         
         var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList()
+        let channelCount = Int(format.channelCount)
+        let bufferList = AudioBufferList.allocate(maximumBuffers: channelCount)
+        defer { free(UnsafeMutableRawPointer(bufferList.unsafeMutablePointer)) }
         
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            bufferListOut: bufferList.unsafeMutablePointer,
+            bufferListSize: AudioBufferList.sizeInBytes(maximumBuffers: channelCount),
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
-            flags: 0,
+            flags: UInt32(kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment),
             blockBufferOut: &blockBuffer
         )
         
         guard status == noErr else { return nil }
         
-        if let srcData = audioBufferList.mBuffers.mData,
-           let dstData = pcmBuffer.floatChannelData?[0] {
-            let byteSize = Int(audioBufferList.mBuffers.mDataByteSize)
-            memcpy(dstData, srcData, min(byteSize, Int(pcmBuffer.frameLength) * MemoryLayout<Float>.size))
-        } else if let srcData = audioBufferList.mBuffers.mData,
-                  let dstData = pcmBuffer.int16ChannelData?[0] {
-            let byteSize = Int(audioBufferList.mBuffers.mDataByteSize)
-            memcpy(dstData, srcData, min(byteSize, Int(pcmBuffer.frameLength) * MemoryLayout<Int16>.size))
+        let numBuffers = Int(bufferList.unsafePointer.pointee.mNumberBuffers)
+        let isNonInterleaved = format.isInterleaved == false && channelCount > 1
+        
+        if let dst = pcmBuffer.floatChannelData {
+            for ch in 0..<channelCount {
+                let bufIndex = isNonInterleaved ? min(ch, numBuffers - 1) : 0
+                if let src = bufferList[bufIndex].mData {
+                    let byteSize = Int(bufferList[bufIndex].mDataByteSize)
+                    let copyBytes = min(byteSize, Int(pcmBuffer.frameLength) * MemoryLayout<Float>.size)
+                    memcpy(dst[ch], src, copyBytes)
+                }
+            }
+        } else if let dst = pcmBuffer.int16ChannelData {
+            for ch in 0..<channelCount {
+                let bufIndex = isNonInterleaved ? min(ch, numBuffers - 1) : 0
+                if let src = bufferList[bufIndex].mData {
+                    let byteSize = Int(bufferList[bufIndex].mDataByteSize)
+                    let copyBytes = min(byteSize, Int(pcmBuffer.frameLength) * MemoryLayout<Int16>.size)
+                    memcpy(dst[ch], src, copyBytes)
+                }
+            }
+        } else if let dst = pcmBuffer.int32ChannelData {
+            for ch in 0..<channelCount {
+                let bufIndex = isNonInterleaved ? min(ch, numBuffers - 1) : 0
+                if let src = bufferList[bufIndex].mData {
+                    let byteSize = Int(bufferList[bufIndex].mDataByteSize)
+                    let copyBytes = min(byteSize, Int(pcmBuffer.frameLength) * MemoryLayout<Int32>.size)
+                    memcpy(dst[ch], src, copyBytes)
+                }
+            }
         }
         
         return pcmBuffer
@@ -648,7 +759,12 @@ extension WebRTCManager: LKRTCPeerConnectionDelegate {
             track.add(self)
         }
         Task { @MainActor [weak self] in
-            self?.remoteAudioTracks.append(contentsOf: stream.audioTracks)
+            guard let self else { return }
+            for track in stream.audioTracks {
+                if !self.remoteAudioTracks.contains(where: { $0 === track }) {
+                    self.remoteAudioTracks.append(track)
+                }
+            }
         }
     }
     
@@ -702,7 +818,10 @@ extension WebRTCManager: LKRTCPeerConnectionDelegate {
             print("[WebRTCManager] Remote audio track received via RTP receiver.")
             audioTrack.add(self)
             Task { @MainActor [weak self] in
-                self?.remoteAudioTracks.append(audioTrack)
+                guard let self else { return }
+                if !self.remoteAudioTracks.contains(where: { $0 === audioTrack }) {
+                    self.remoteAudioTracks.append(audioTrack)
+                }
             }
         }
     }
@@ -735,44 +854,6 @@ extension WebRTCManager: LKRTCDataChannelDelegate {
             guard let self else { return }
             self.delegate?.webRTCManager(self, didReceiveMessage: message)
         }
-    }
-}
-
-// MARK: - LKRTCAudioCustomProcessingDelegate
-
-extension WebRTCManager: LKRTCAudioCustomProcessingDelegate {
-    nonisolated public func audioProcessingInitialize(sampleRate: Int, channels: Int) {
-        print("[WebRTCManager] audioProcessingInitialize: sampleRate=\(sampleRate), channels=\(channels)")
-        audioState.processingSampleRate = Double(sampleRate)
-        audioState.processingChannels = channels
-    }
-    
-    nonisolated public func audioProcessingProcess(audioBuffer: LKRTCAudioBuffer) {
-        let frames = audioBuffer.frames
-        let channels = audioBuffer.channels
-        
-        let primaryBuf = audioBuffer.rawBuffer(forChannel: 0)
-        let hasCustomAudio = audioState.readSamples(into: primaryBuf, count: frames)
-        
-        if hasCustomAudio {
-            // Duplicate mono custom audio to remaining channels if multi-channel
-            if channels > 1 {
-                for ch in 1..<channels {
-                    let chBuf = audioBuffer.rawBuffer(forChannel: ch)
-                    memcpy(chBuf, primaryBuf, frames * MemoryLayout<Float>.size)
-                }
-            }
-        } else if audioState.isMicrophoneMuted {
-            // Silence microphone input when muted
-            for ch in 0..<channels {
-                let chBuf = audioBuffer.rawBuffer(forChannel: ch)
-                memset(chBuf, 0, frames * MemoryLayout<Float>.size)
-            }
-        }
-    }
-    
-    nonisolated public func audioProcessingRelease() {
-        print("[WebRTCManager] audioProcessingRelease called.")
     }
 }
 

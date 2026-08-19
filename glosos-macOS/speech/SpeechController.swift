@@ -551,15 +551,26 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         }
         
         // Feed mono channel data to VAD processor
+        var samples: [Float] = []
         if let channelData = buffer.floatChannelData {
             let frameLength = Int(buffer.frameLength)
-            var samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
-            
-            if vadNoiseGateEnabled && !samples.isEmpty {
+            samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+        } else if let channelData = buffer.int16ChannelData {
+            let frameLength = Int(buffer.frameLength)
+            let ptr = channelData[0]
+            samples = (0..<frameLength).map { Float(ptr[$0]) / 32768.0 }
+        } else if let channelData = buffer.int32ChannelData {
+            let frameLength = Int(buffer.frameLength)
+            let ptr = channelData[0]
+            samples = (0..<frameLength).map { Float(ptr[$0]) / 2147483648.0 }
+        }
+        
+        if !samples.isEmpty {
+            if vadNoiseGateEnabled {
                 let sumOfSquares = samples.reduce(0.0) { $0 + Double($1 * $1) }
                 let rms = sqrt(sumOfSquares / Double(samples.count))
                 if rms < vadNoiseGateRMSThreshold {
-                    samples = Array(repeating: 0.0, count: frameLength)
+                    samples = Array(repeating: 0.0, count: samples.count)
                 }
             }
             
