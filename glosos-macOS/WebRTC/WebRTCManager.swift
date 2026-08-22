@@ -9,11 +9,12 @@ import Foundation
 @preconcurrency import LiveKitWebRTC
 import AVFoundation
 import CoreMedia
+import Accelerate
 
 // SAFETY: LKRTCSessionDescription is immutable after construction (read-only `type` and `sdp` properties).
-extension LKRTCSessionDescription: @unchecked Sendable {}
+extension LKRTCSessionDescription: @retroactive @unchecked Sendable {}
 // SAFETY: LKRTCIceCandidate is immutable after construction (read-only `sdp`, `sdpMLineIndex`, `sdpMid` properties).
-extension LKRTCIceCandidate: @unchecked Sendable {}
+extension LKRTCIceCandidate: @retroactive @unchecked Sendable {}
 
 extension AVAudioPCMBuffer {
     nonisolated func makeCopy() -> AVAudioPCMBuffer? {
@@ -60,6 +61,7 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
     private var _processingChannels: Int = 1
     
     private var _sampleQueue: [Float] = []
+    private var _readIndex: Int = 0
     private var _activeBuffersCount = 0
     private var _onPlaybackFinished: (@Sendable () -> Void)?
     
@@ -136,6 +138,7 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         _sampleQueue.removeAll(keepingCapacity: false)
+        _readIndex = 0
         _activeBuffersCount = 0
         _onPlaybackFinished = nil
         _isStreaming = false
@@ -146,6 +149,10 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
     func appendSamples(_ samples: [Float], count: Int = 1, completion: (@Sendable () -> Void)? = nil) {
         lock.lock()
         defer { lock.unlock() }
+        if _readIndex > 96000 {
+            _sampleQueue.removeFirst(_readIndex)
+            _readIndex = 0
+        }
         _sampleQueue.append(contentsOf: samples)
         if count > 0 {
             _activeBuffersCount += count
@@ -159,6 +166,7 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         _sampleQueue.removeAll(keepingCapacity: false)
+        _readIndex = 0
         _isStreaming = true
         _streamCompletion = completion
         _streamFinishedSending = false
@@ -167,6 +175,10 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
     func appendStreamSamples(_ samples: [Float]) {
         lock.lock()
         defer { lock.unlock() }
+        if _readIndex > 96000 {
+            _sampleQueue.removeFirst(_readIndex)
+            _readIndex = 0
+        }
         _sampleQueue.append(contentsOf: samples)
     }
     
@@ -174,7 +186,7 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         _streamFinishedSending = true
-        if _sampleQueue.isEmpty {
+        if _sampleQueue.count == _readIndex {
             let completion = _streamCompletion
             _streamCompletion = nil
             _isStreaming = false
@@ -189,8 +201,12 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         
-        let available = _sampleQueue.count
+        let available = _sampleQueue.count - _readIndex
         if available == 0 {
+            if _sampleQueue.count > 0 {
+                _sampleQueue.removeAll(keepingCapacity: true)
+                _readIndex = 0
+            }
             if _isStreaming && _streamFinishedSending {
                 let completion = _streamCompletion
                 _streamCompletion = nil
@@ -210,16 +226,18 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         }
         
         let toCopy = min(available, count)
-        _sampleQueue.withUnsafeBufferPointer { bufPtr in
-            memcpy(dest, bufPtr.baseAddress!, toCopy * MemoryLayout<Float>.size)
+        _ = _sampleQueue.withUnsafeBufferPointer { bufPtr in
+            memcpy(dest, bufPtr.baseAddress!.advanced(by: _readIndex), toCopy * MemoryLayout<Float>.size)
         }
-        _sampleQueue.removeFirst(toCopy)
+        _readIndex += toCopy
         
         if toCopy < count {
             memset(dest.advanced(by: toCopy), 0, (count - toCopy) * MemoryLayout<Float>.size)
         }
         
-        if _sampleQueue.isEmpty {
+        if _sampleQueue.count == _readIndex {
+            _sampleQueue.removeAll(keepingCapacity: true)
+            _readIndex = 0
             if _isStreaming && _streamFinishedSending {
                 let completion = _streamCompletion
                 _streamCompletion = nil
@@ -326,6 +344,10 @@ public final class WebRTCManager: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var dataChannel: LKRTCDataChannel?
     private var pendingIceCandidates: [LKRTCIceCandidate] = []
+    
+    private var cachedAudioConverter: AVAudioConverter?
+    private var cachedAudioConverterInputFormat: AVAudioFormat?
+    private var cachedAudioConverterOutputFormat: AVAudioFormat?
     
     public var iceConnectionState: RTCIceConnectionState {
         return peerConnection?.iceConnectionState ?? .closed
@@ -568,7 +590,19 @@ public final class WebRTCManager: NSObject {
         let monoBuffer: AVAudioPCMBuffer
         if buffer.format == targetFormat {
             monoBuffer = buffer
-        } else if let converter = AVAudioConverter(from: buffer.format, to: targetFormat) {
+        } else {
+            let converter: AVAudioConverter
+            if let cached = cachedAudioConverter, cachedAudioConverterInputFormat == buffer.format, cachedAudioConverterOutputFormat == targetFormat {
+                converter = cached
+            } else if let newConverter = AVAudioConverter(from: buffer.format, to: targetFormat) {
+                cachedAudioConverter = newConverter
+                cachedAudioConverterInputFormat = buffer.format
+                cachedAudioConverterOutputFormat = targetFormat
+                converter = newConverter
+            } else {
+                return []
+            }
+            
             let sampleRateRatio = targetSampleRate / buffer.format.sampleRate
             let targetCapacity = AVAudioFrameCount(Double(buffer.frameLength) * sampleRateRatio + 1024)
             guard let converted = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: targetCapacity) else {
@@ -591,8 +625,6 @@ public final class WebRTCManager: NSObject {
                 return []
             }
             monoBuffer = converted
-        } else {
-            return []
         }
         
         guard let floatData = monoBuffer.floatChannelData?[0], monoBuffer.frameLength > 0 else {
@@ -603,9 +635,8 @@ public final class WebRTCManager: NSObject {
         // WebRTC's APM AudioBuffer (float) expects samples scaled to the Int16 range [-32768.0, 32767.0].
         // CoreAudio's float buffers are in the [-1.0, 1.0] range, so they must be scaled up.
         var scaledSamples = [Float](repeating: 0, count: count)
-        for i in 0..<count {
-            scaledSamples[i] = floatData[i] * 32768.0
-        }
+        var multiplier: Float = 32768.0
+        vDSP_vsmul(floatData, 1, &multiplier, &scaledSamples, 1, vDSP_Length(count))
         return scaledSamples
     }
     

@@ -16,11 +16,9 @@ import MLXLMCommon
 import HuggingFace
 
 // SAFETY: Qwen3ASRModel is only ever accessed from one Task at a time, serialized by activeQwenGenerationTask.
-extension Qwen3ASRModel: @unchecked Sendable {}
-// SAFETY: Qwen3TTSModel is only ever accessed from one Task at a time, serialized by activeQwenGenerationTask.
-extension Qwen3TTSModel: @unchecked Sendable {}
+extension Qwen3ASRModel: @retroactive @unchecked Sendable {}
 // SAFETY: AVAudioPCMBuffer is effectively immutable for read-only use — a known Apple SDK omission.
-extension AVAudioPCMBuffer: @unchecked Sendable {}
+extension AVAudioPCMBuffer: @retroactive @unchecked Sendable {}
 
 enum ASRSystem: String, CaseIterable, Identifiable, Sendable {
     case apple = "apple"
@@ -765,6 +763,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
             let oldTask = activeQwenGenerationTask
             activeQwenGenerationTask?.cancel()
             
+            let startStreamHandler = self.onStartAudioStream
+            let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(model.sampleRate), channels: 1, interleaved: false)!
+            
             let newTask = Task { @MainActor in
                 if let oldTask = oldTask {
                     _ = await oldTask.result
@@ -780,9 +781,7 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
                 self.statusMessage = "Playing synthesized audio."
                 self.log("Starting streaming Qwen3 TTS.")
                 
-                let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(model.sampleRate), channels: 1, interleaved: false)!
-                
-                self.onStartAudioStream?(targetFormat) { [weak self] in
+                startStreamHandler?(targetFormat) { [weak self] in
                     guard let self = self else { return }
                     self.log("Qwen3 TTS streaming playback finished.")
                     self.finishPlayback(wasInterrupted: false)
@@ -1213,11 +1212,9 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
         Task { @MainActor in
             var recognizedText: String? = nil
             do {
-                self.log("Loading and resampling audio for Qwen3 ASR...")
-                let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
-                
                 self.log("Running Qwen3 ASR generation with context length: \(context.count)...")
-                let text = await Task.detached(priority: .userInitiated) { () -> String in
+                let text = try await Task.detached(priority: .userInitiated) { () -> String in
+                    let (_, audioArray) = try loadAudioArray(from: url, sampleRate: 16000)
                     let output = model.generate(audio: audioArray, context: context, language: language)
                     return output.text
                 }.value
@@ -1753,11 +1750,11 @@ final class SpeechController: NSObject, ObservableObject, @preconcurrency AVSpee
     }
 }
 
-final class PlaybackCancellationBox: @unchecked Sendable {
+nonisolated final class PlaybackCancellationBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var _isCancelled = false
+    nonisolated(unsafe) private var _isCancelled = false
     
-    var isCancelled: Bool {
+    nonisolated var isCancelled: Bool {
         get {
             lock.lock()
             defer { lock.unlock() }
