@@ -7,6 +7,7 @@
 
 import Foundation
 import CoreML
+import Accelerate
 
 public enum SileroVADError: LocalizedError {
     case modelNotReady
@@ -26,8 +27,27 @@ nonisolated private func resampleAudio(_ samples: [Float], from inputRate: Int, 
     guard inputRate != outputRate else {
         return samples
     }
-    guard inputRate > 0 && outputRate > 0 else {
+    guard inputRate > 0 && outputRate > 0, !samples.isEmpty else {
         return samples
+    }
+    
+    // Fast path for exact integer downsampling (e.g. 48kHz -> 16kHz)
+    if inputRate % outputRate == 0 {
+        let stride = inputRate / outputRate
+        let outputCount = samples.count / stride
+        guard outputCount > 0 else { return [] }
+        var resampled = [Float](repeating: 0, count: outputCount)
+        samples.withUnsafeBufferPointer { src in
+            resampled.withUnsafeMutableBufferPointer { dst in
+                guard let srcBase = src.baseAddress, let dstBase = dst.baseAddress else { return }
+                var srcIdx = 0
+                for i in 0..<outputCount {
+                    dstBase[i] = srcBase[srcIdx]
+                    srcIdx += stride
+                }
+            }
+        }
+        return resampled
     }
     
     let ratio = Double(inputRate) / Double(outputRate)
@@ -37,15 +57,20 @@ nonisolated private func resampleAudio(_ samples: [Float], from inputRate: Int, 
     }
     
     var resampled = [Float](repeating: 0, count: outputCount)
-    for i in 0..<outputCount {
-        let exactIdx = Double(i) * ratio
-        let idx = Int(exactIdx)
-        let nextIdx = min(idx + 1, samples.count - 1)
-        let weight = Float(exactIdx - Double(idx))
-        
-        let val1 = samples[idx]
-        let val2 = samples[nextIdx]
-        resampled[i] = val1 * (1.0 - weight) + val2 * weight
+    let maxSrcIdx = samples.count - 1
+    samples.withUnsafeBufferPointer { src in
+        resampled.withUnsafeMutableBufferPointer { dst in
+            guard let srcBase = src.baseAddress, let dstBase = dst.baseAddress else { return }
+            for i in 0..<outputCount {
+                let exactIdx = Double(i) * ratio
+                let idx = Int(exactIdx)
+                let nextIdx = min(idx + 1, maxSrcIdx)
+                let weight = Float(exactIdx - Double(idx))
+                let val1 = srcBase[idx]
+                let val2 = srcBase[nextIdx]
+                dstBase[i] = val1 + weight * (val2 - val1)
+            }
+        }
     }
     
     return resampled
@@ -191,13 +216,13 @@ public actor SileroVADProcessor {
         var last64Samples: [Float]
         
         static func initial() throws -> StreamingState {
-            let h = try MLMultiArray(shape: [1, 1, 128] as [NSNumber], dataType: .float32)
-            let c = try MLMultiArray(shape: [1, 1, 128] as [NSNumber], dataType: .float32)
+            let h = try MLMultiArray(shape: [1, 1, 128] as [NSNumber], dataType: .float16)
+            let c = try MLMultiArray(shape: [1, 1, 128] as [NSNumber], dataType: .float16)
             
-            for i in 0..<128 {
-                h[[0, 0, i] as [NSNumber]] = 0.0 as NSNumber
-                c[[0, 0, i] as [NSNumber]] = 0.0 as NSNumber
-            }
+            let hPtr = h.dataPointer.bindMemory(to: Float16.self, capacity: 128)
+            let cPtr = c.dataPointer.bindMemory(to: Float16.self, capacity: 128)
+            memset(hPtr, 0, 128 * MemoryLayout<Float16>.size)
+            memset(cPtr, 0, 128 * MemoryLayout<Float16>.size)
             
             return StreamingState(
                 h: h,
@@ -336,17 +361,19 @@ public actor SileroVADProcessor {
             var streamState = try currentState ?? StreamingState.initial()
 
             for chunk in chunks {
-                // Construct audio input tensor of shape [1, 1, 576]
-                let audioMultiArray = try MLMultiArray(shape: [1, 1, 576] as [NSNumber], dataType: .float32)
+                // Construct audio input tensor of shape [1, 1, 576] with Float16 matching model precision
+                let audioMultiArray = try MLMultiArray(shape: [1, 1, 576] as [NSNumber], dataType: .float16)
+                let audioPtr = audioMultiArray.dataPointer.bindMemory(to: Float16.self, capacity: 576)
                 
-                // Copy 64 context samples
+                // Copy 64 context samples using direct memory write
+                let last64 = streamState.last64Samples
                 for i in 0..<64 {
-                    audioMultiArray[[0, 0, i] as [NSNumber]] = NSNumber(value: streamState.last64Samples[i])
+                    audioPtr[i] = Float16(last64[i])
                 }
                 
-                // Copy 512 current samples
+                // Copy 512 current samples using direct memory write
                 for i in 0..<512 {
-                    audioMultiArray[[0, 0, 64 + i] as [NSNumber]] = NSNumber(value: chunk[i])
+                    audioPtr[64 + i] = Float16(chunk[i])
                 }
 
                 let inputs: [String: Any] = [
@@ -364,7 +391,13 @@ public actor SileroVADProcessor {
                     throw SileroVADError.predictionFailed("CoreML output structure is invalid (missing probability, h_out, or c_out)")
                 }
                 
-                let probability = probabilityArray[0].floatValue
+                let probability: Float
+                if probabilityArray.dataType == .float16 {
+                    let pPtr = probabilityArray.dataPointer.bindMemory(to: Float16.self, capacity: 1)
+                    probability = Float(pPtr[0])
+                } else {
+                    probability = probabilityArray[0].floatValue
+                }
                 
                 // Update streamState
                 streamState = StreamingState(
