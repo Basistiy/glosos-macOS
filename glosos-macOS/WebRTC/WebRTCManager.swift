@@ -257,6 +257,37 @@ private nonisolated final class WebRTCAudioState: @unchecked Sendable {
         
         return true
     }
+    
+    private var _renderedAudioTracks: [LKRTCAudioTrack] = []
+    
+    func attachRendererIfNeeded(_ track: LKRTCAudioTrack, renderer: LKRTCAudioRenderer) {
+        lock.lock()
+        defer { lock.unlock() }
+        if !_renderedAudioTracks.contains(where: { $0 === track }) {
+            _renderedAudioTracks.append(track)
+            track.add(renderer)
+            print("[WebRTCManager] Attached audio renderer to remote track '\(track.trackId)'. Total attached: \(_renderedAudioTracks.count)")
+        }
+    }
+    
+    func detachRenderer(_ track: LKRTCAudioTrack, renderer: LKRTCAudioRenderer) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let idx = _renderedAudioTracks.firstIndex(where: { $0 === track }) {
+            let t = _renderedAudioTracks.remove(at: idx)
+            t.remove(renderer)
+            print("[WebRTCManager] Detached audio renderer from remote track '\(t.trackId)'. Remaining attached: \(_renderedAudioTracks.count)")
+        }
+    }
+    
+    func removeAllRenderers(renderer: LKRTCAudioRenderer) {
+        lock.lock()
+        defer { lock.unlock() }
+        for track in _renderedAudioTracks {
+            track.remove(renderer)
+        }
+        _renderedAudioTracks.removeAll()
+    }
 }
 
 private final class WebRTCCaptureAudioProcessor: NSObject, LKRTCAudioCustomProcessingDelegate, @unchecked Sendable {
@@ -370,7 +401,6 @@ public final class WebRTCManager: NSObject {
     }
     
     private var localAudioTrack: LKRTCAudioTrack?
-    private var remoteAudioTracks: [LKRTCAudioTrack] = []
     
     public var isSpeakersMuted: Bool {
         get { audioState.isSpeakersMuted }
@@ -412,14 +442,11 @@ public final class WebRTCManager: NSObject {
         let pc = self.peerConnection
         let dc = self.dataChannel
         let state = self.audioState
-        let tracks = self.remoteAudioTracks
         
         pc?.delegate = nil
         dc?.delegate = nil
         
-        for track in tracks {
-            track.remove(self)
-        }
+        state.removeAllRenderers(renderer: self)
         
         DispatchQueue.main.async {
             dc?.close()
@@ -565,10 +592,7 @@ public final class WebRTCManager: NSObject {
     
     public func cleanup(clearPendingCandidates: Bool = true) {
         print("[WebRTCManager] Cleaning up WebRTC resources...")
-        for track in remoteAudioTracks {
-            track.remove(self)
-        }
-        remoteAudioTracks.removeAll()
+        audioState.removeAllRenderers(renderer: self)
         
         if let channel = dataChannel {
             channel.close()
@@ -787,24 +811,14 @@ extension WebRTCManager: LKRTCPeerConnectionDelegate {
     nonisolated public func peerConnection(_ peerConnection: LKRTCPeerConnection, didAdd stream: LKRTCMediaStream) {
         print("[WebRTCManager] Remote stream added with \(stream.audioTracks.count) audio tracks.")
         for track in stream.audioTracks {
-            track.add(self)
-        }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            for track in stream.audioTracks {
-                if !self.remoteAudioTracks.contains(where: { $0 === track }) {
-                    self.remoteAudioTracks.append(track)
-                }
-            }
+            self.audioState.attachRendererIfNeeded(track, renderer: self)
         }
     }
     
     nonisolated public func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove stream: LKRTCMediaStream) {
+        print("[WebRTCManager] Remote stream removed with \(stream.audioTracks.count) audio tracks.")
         for track in stream.audioTracks {
-            track.remove(self)
-        }
-        Task { @MainActor [weak self] in
-            self?.remoteAudioTracks.removeAll(where: { track in stream.audioTracks.contains(where: { $0 === track }) })
+            self.audioState.detachRenderer(track, renderer: self)
         }
     }
     
@@ -847,13 +861,7 @@ extension WebRTCManager: LKRTCPeerConnectionDelegate {
     nonisolated public func peerConnection(_ peerConnection: LKRTCPeerConnection, didAdd rtpReceiver: LKRTCRtpReceiver, streams: [LKRTCMediaStream]) {
         if let audioTrack = rtpReceiver.track as? LKRTCAudioTrack {
             print("[WebRTCManager] Remote audio track received via RTP receiver.")
-            audioTrack.add(self)
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                if !self.remoteAudioTracks.contains(where: { $0 === audioTrack }) {
-                    self.remoteAudioTracks.append(audioTrack)
-                }
-            }
+            self.audioState.attachRendererIfNeeded(audioTrack, renderer: self)
         }
     }
 }

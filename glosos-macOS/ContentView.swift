@@ -544,7 +544,7 @@ struct ContentView: View {
         
         // Setup incoming WebRTC audio transcription callback
         p2pController.onIncomingAudioBuffer = { [weak speechController] buffer in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 speechController?.feedExternalAudio(buffer)
             }
         }
