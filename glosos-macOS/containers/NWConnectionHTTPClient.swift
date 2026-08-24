@@ -328,19 +328,19 @@ nonisolated final class NWConnectionHTTPClient: Sendable {
         onLine: @escaping @Sendable (String) async -> Void
     ) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { content, _, isComplete, err in
-            if let content {
-                let lines = streamBuffer.appendAndExtractLines(content)
-                for line in lines {
-                    Task {
+            Task {
+                if let content {
+                    let lines = streamBuffer.appendAndExtractLines(content)
+                    for line in lines {
                         await onLine(line)
                     }
                 }
-            }
 
-            if isComplete || err != nil {
-                box.resume(with: .success(()), connection: connection)
-            } else {
-                readStreamData(connection: connection, streamBuffer: streamBuffer, box: box, onLine: onLine)
+                if isComplete || err != nil {
+                    box.resume(with: .success(()), connection: connection)
+                } else {
+                    readStreamData(connection: connection, streamBuffer: streamBuffer, box: box, onLine: onLine)
+                }
             }
         }
     }
